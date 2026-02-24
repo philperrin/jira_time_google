@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <style>
+    body {
+      font-family: sans-serif;
+    }
+  </style>
+  </head>
+  <body>
+    <p>Use this form to create a new Jira issue - it will be assigned to you in the project specified.<br>
+    <b>NOTE: This modal is not yet functional.</b></p>
+    <form id="newJira">
+      <label for="input1">Project:</label><br>
+        <select id="input1" name="input1">
+
+        </select><br><br>
+      <label for="input2">Technology:</label><br>
+        <select id="input2" name="input2">
+          <option value=""></option>
+          <option value="Core">Core</option>
+          <option value="AIMS">AIMS</option>
+          <option value="Atlan">Atlan</option>
+          <option value="AWS Glue">AWS Glue</option>
+          <option value="dbt">dbt</option>
+          <option value="DQLabs">DQLabs</option>
+          <option value="HeyWM">HeyWM</option>
+          <option value="HVR">HVR</option>
+          <option value="InfoSphere">InfoSphere</option>
+          <option value="Matillion">Matillion</option>
+          <option value="Newton Insights">Newton Insights</option>
+          <option value="Power Apps">Power Apps</option>
+          <option value="Power Automate">Power Automate</option>
+          <option value="Power BI">Power BI</option>
+          <option value="Qlik">Qlik</option>
+          <option value="Sigma">Sigma</option>
+          <option value="Snowflake">Snowflake</option>
+          <option value="Spotfire">Spotfire</option>
+          <option value="Tableau">Tableau</option>
+        </select><br><br>
+      <label for="input3">EOps Type:</label><br>
+        <select id="input3" name="input3">
+          <option value="Core">Core</option>
+          <option value="AdvOps">AdvOps</option>
+        </select><br><br>
+      <label for="input4">Summary:</label><br>
+      <input type="text" id="input4" name="input4"><br><br>
+      <label for="input5">Description:</label><br>
+      <textarea id="input5" name="notes" rows="4" cols="50"></textarea><br><br>
+      <input type="button" value="Submit" onclick="google.script.run
+             .withSuccessHandler(google.script.host.close)
+             .makeJira(this.parentNode)">
+    </form>
+    
+    <script>
+      function handleSuccess(returnMessage) {
+        alert(returnMessage);
+      }
+
+
+  // Call the server-side function when the page loads
+    google.script.run.withSuccessHandler(populateDropdown).getDropdownValues();
+
+    function populateDropdown(items) {
+      var select = document.getElementById('input1');
+      
+      // Clear existing options (if any)
+      select.innerHTML = ''; 
+
+      // Add new options from the array
+      items.forEach(function(item) {
+        var option = document.createElement('option');
+        option.value = item;
+        option.text = item;
+        select.appendChild(option);
+      });
+    }
+    </script>
+  </body>
+</html>
