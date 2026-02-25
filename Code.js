@@ -154,19 +154,21 @@ function importCalendarEventsToSheet() {
     }
     const events = calendar.getEvents(START_DATE, END_DATE);
     const allocationSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Allocation');
-    const allocationData = allocationSheet.getRange(1, 1, allocationSheet.getLastRow(), 2).getValues();
+    const allocationData = allocationSheet.getRange(2, 1, 12, 2).getValues();
+    Logger.log("Allocation Data: "+allocationData)
     const colorMap = Object.fromEntries(
       allocationData
-        .filter(row => row[0] !== "")
-        .map(row => [row[0], row[3]])
+        .filter(row => row[1] !== "")
+        .map(row => [row[0], row[1]])
     );
+    Logger.log(JSON.stringify(colorMap))
     const data = events.map(event => {
       const title = event.getTitle();
       const tz = Session.getScriptTimeZone();
-      const startTime_in = event.getStartTime();
-      const startTime = Utilities.formatDate(startTime_in, tz, "hh:mm a");
-      const endTime_in = event.getEndTime();
-      const endTime = Utilities.formatDate(endTime_in, tz, "hh:mm a");
+      const startTime = event.getStartTime();
+      const startTime_time = Utilities.formatDate(startTime, tz, "hh:mm a");
+      const endTime = event.getEndTime();
+      const endTime_time = Utilities.formatDate(endTime, tz, "hh:mm a");
       const startDate = Utilities.formatDate(startTime, tz, "yyyy-MM-dd");
       const description = event.getDescription();
       const match = description.match(/^[^________________________________________________________________________________]+/); // Cuts off all the call-in info from Teams calls.
@@ -174,7 +176,7 @@ function importCalendarEventsToSheet() {
       const eventColor = event.getColor();
       const eventAttending = event.getMyStatus();
       const mappedValue = colorMap[eventColor] || "Unknown";
-      return [title, startDate, startTime, endTime, descriptionClean, eventAttending, mappedValue];
+      return [title, startDate, startTime_time, endTime_time, descriptionClean, eventAttending, mappedValue];
     });
     const filteredData = data.filter(row => row[5] != 8 && row[5] != 11);
     if (filteredData.length > 0) {
