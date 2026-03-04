@@ -15,6 +15,7 @@ function onOpen() {
     .addToUi();
 }
 
+
 /*
 -----------------------------------------------
 01: Store Jira API key and store project codes.
