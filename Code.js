@@ -10,6 +10,7 @@ function onOpen() {
         .addItem('Create new Jira task', 'createJira')
         .addItem('Add/Update Jira API', 'collectConfig')
         .addItem('Add/Update Jira Base URL', 'collectJiraUrl')
+        .addItem('Pull worklog', 'pullWorklog')
         .addItem('Run tests', 'runAllTests');
     ui.createMenu('Log Jira Time')
         .addItem('Populate assignments', 'retrieveJiraIssues')
@@ -272,6 +273,7 @@ the Dropdown Value (column A). Events are stacked back-to-back.
  */
 function scheduleCalendarEvents() {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const JIRA_URL = getUserProperties().getProperty('JIRA_BASE_URL');
     const sheet = ss.getSheetByName('Assignments');
     const lastRow = sheet.getLastRow();
     if (lastRow < 2) {
@@ -313,7 +315,7 @@ function scheduleCalendarEvents() {
     const toSchedule = data.reduce((acc, row, i) => {
         const scheduleTime = row[8]; // column I (0-indexed: 8)
         if (typeof scheduleTime === 'number' && scheduleTime > 0) {
-            acc.push({ rowIndex: i + 2, dropdownValue: row[0], jiraProject: row[3], hours: scheduleTime });
+            acc.push({ rowIndex: i + 2, dropdownValue: row[0], key: row[1], jiraProject: row[3], hours: scheduleTime });
         }
         return acc;
     }, []);
@@ -334,7 +336,7 @@ function scheduleCalendarEvents() {
     toSchedule.forEach(entry => {
         const durationMs = entry.hours * 60 * 60 * 1000;
         const endTime = new Date(cursor.getTime() + durationMs);
-        const event = calendar.createEvent(entry.jiraProject, cursor, endTime, { description: entry.dropdownValue });
+        const event = calendar.createEvent(entry.jiraProject, cursor, endTime, { description: `${entry.dropdownValue}\n${JIRA_URL}/browse/${entry.key}` });
         const eventColor = projectColorMap[entry.jiraProject];
         if (eventColor) event.setColor(eventColor);
         created.push(entry.rowIndex);
@@ -378,6 +380,23 @@ function getDropdownValues() {
 function makeJira(formData) {
     const JIRA_URL = getUserProperties().getProperty('JIRA_BASE_URL');
     const authHeader = getAuthHeader_();
+    const email = Session.getActiveUser().getEmail();
+
+    // Resolve email to Jira accountId
+    let accountId = null;
+    try {
+        const userSearch = UrlFetchApp.fetch(
+            `${JIRA_URL}/rest/api/3/user/search?query=${encodeURIComponent(email)}`,
+            { headers: { Authorization: authHeader }, muteHttpExceptions: true }
+        );
+        const userResults = JSON.parse(userSearch.getContentText());
+        if (Array.isArray(userResults) && userResults.length > 0) {
+            accountId = userResults[0].accountId;
+        }
+    } catch (e) {
+        Logger.log('Could not resolve Jira accountId: ' + e.message);
+    }
+
     const payload = {
         fields: {
             project: { key: formData.input1 },
@@ -385,9 +404,10 @@ function makeJira(formData) {
             description: {
                 type: 'doc',
                 version: 1,
-                content: [{ type: 'paragraph', content: [{ type: 'text', text: formData.input5 || '' }] }]
+                content: [{ type: 'paragraph', content: [{ type: 'text', text: formData.notes || '' }] }]
             },
-            issuetype: { name: 'Task' }
+            issuetype: { name: 'Task' },
+            ...(accountId && { assignee: { accountId } })
         }
     };
     const options = {
@@ -402,7 +422,7 @@ function makeJira(formData) {
         const responseCode = response.getResponseCode();
         const responseData = JSON.parse(response.getContentText());
         if (responseCode === 201) {
-            retrieveJiraIssues();
+            //retrieveJiraIssues();
             return `Successfully created ${responseData.key}.`;
         } else {
             return `Error (${responseCode}): ${JSON.stringify(responseData.errors || responseData)}`;
@@ -494,6 +514,121 @@ function sendTime() {
 
 /*
 -----------------------------------------------
+06: Fetch all worklogs logged by the current user since Jan 1 of the current
+year and write each entry as a row to the LogPull sheet. Handles paginated
+issue results (nextPageToken) and paginated worklog fields (fetchAll).
+-----------------------------------------------
+*/
+/**
+ * Pulls all worklogs for the current user from Jan 1 of the current year and
+ * writes them to the LogPull sheet. Creates the sheet if it does not exist.
+ * Columns: project key, issue key, summary, timeSpent (text), started (ISO),
+ * timeSpent hours (decimal), started month (date of the 1st).
+ */
+function pullWorklog() {
+    const JIRA_URL = getUserProperties().getProperty('JIRA_BASE_URL');
+    const authHeader = getAuthHeader_();
+    const userEmail = Session.getActiveUser().getEmail();
+    const currentYear = new Date().getFullYear();
+    const fromDate = `${currentYear}-01-01`;
+    const fromTimestamp = new Date(currentYear, 0, 1).getTime();
+
+    const JQL = encodeURIComponent(`worklogAuthor=currentUser() AND worklogDate >= ${fromDate}`);
+    const BASE_ENDPOINT = `${JIRA_URL}/rest/api/3/search/jql?fields=key,summary,worklog,project&jql=${JQL}&maxResults=100`;
+    const fetchOpts = { headers: { Authorization: authHeader }, method: 'get', muteHttpExceptions: true };
+
+    try {
+        // Page through all matching issues.
+        let allIssues = [];
+        let nextPageToken = null;
+        do {
+            const endpoint = nextPageToken ? `${BASE_ENDPOINT}&nextPageToken=${nextPageToken}` : BASE_ENDPOINT;
+            const data = JSON.parse(UrlFetchApp.fetch(endpoint, fetchOpts).getContentText());
+            if (data.issues && data.issues.length > 0) allIssues = allIssues.concat(data.issues);
+            nextPageToken = data.nextPageToken || null;
+        } while (nextPageToken);
+
+        if (allIssues.length === 0) {
+            SpreadsheetApp.getUi().alert('No issues found for the current year.');
+            return;
+        }
+
+        // Identify issues where the search result returned a partial worklog list.
+        const extraFetches = [];
+        allIssues.forEach((issue, idx) => {
+            const wl = issue.fields.worklog;
+            if (!wl) return;
+            const fetched = wl.worklogs ? wl.worklogs.length : 0;
+            for (let startAt = fetched; startAt < (wl.total || 0); startAt += 100) {
+                extraFetches.push({ issueIdx: idx, startAt });
+            }
+        });
+
+        // Batch-fetch any remaining worklog pages.
+        if (extraFetches.length > 0) {
+            UrlFetchApp.fetchAll(extraFetches.map(f => ({
+                url: `${JIRA_URL}/rest/api/3/issue/${allIssues[f.issueIdx].key}/worklog?startAt=${f.startAt}&maxResults=100`,
+                headers: { Authorization: authHeader },
+                method: 'get',
+                muteHttpExceptions: true
+            }))).forEach((resp, i) => {
+                const data = JSON.parse(resp.getContentText());
+                if (!data.worklogs) return;
+                const wl = allIssues[extraFetches[i].issueIdx].fields.worklog;
+                wl.worklogs = (wl.worklogs || []).concat(data.worklogs);
+            });
+        }
+
+        // Build one row per worklog entry authored by the current user this year.
+        const rows = [];
+        allIssues.forEach(issue => {
+            const projectKey = issue.fields.project.key;
+            const issueKey = issue.key;
+            const summary = issue.fields.summary;
+            const worklogs = (issue.fields.worklog && issue.fields.worklog.worklogs) || [];
+            worklogs.forEach(log => {
+                if (!log.author || log.author.emailAddress !== userEmail) return;
+                const startedStr = log.started || '';
+                if (!startedStr) return;
+                const startedDate = new Date(startedStr);
+                if (startedDate.getTime() < fromTimestamp) return;
+                const timeSpent = log.timeSpent || '';
+                rows.push([
+                    projectKey,
+                    issueKey,
+                    summary,
+                    timeSpent,
+                    startedStr,
+                    parseTimeSpentHours_(timeSpent),
+                    new Date(startedDate.getFullYear(), startedDate.getMonth(), 1)
+                ]);
+            });
+        });
+
+        const ss = SpreadsheetApp.getActiveSpreadsheet();
+        let logPullSheet = ss.getSheetByName('LogPull');
+        if (!logPullSheet) logPullSheet = ss.insertSheet('LogPull');
+        logPullSheet.clear();
+
+        const headers = [
+            'fields.project.key', 'issue.key', 'fields.summary',
+            'fields.worklog.worklogs.timeSpent', 'fields.worklog.worklogs.started',
+            'fields.worklog.worklogs.timeSpent.hours', 'fields.worklog.worklogs.started.month'
+        ];
+        logPullSheet.appendRow(headers);
+        if (rows.length > 0) {
+            logPullSheet.getRange(2, 1, rows.length, headers.length).setValues(rows);
+        }
+
+        SpreadsheetApp.getUi().alert(`Successfully pulled ${rows.length} worklog entries.`);
+    } catch (e) {
+        Logger.log(`pullWorklog error: ${e}`);
+        SpreadsheetApp.getUi().alert('Error: Could not pull worklog data.');
+    }
+}
+
+/*
+-----------------------------------------------
 Helper Functions
 -----------------------------------------------
 */
@@ -550,6 +685,17 @@ function getWorklogTotals_(issueKeys, authHeader, jiraUrl, userEmail) {
 /** Returns the total seconds logged by userEmail on a single issue. */
 function getIssueWorklogTotal_(issueKey, authHeader, jiraUrl, userEmail) {
     return getWorklogTotals_([issueKey], authHeader, jiraUrl, userEmail)[0];
+}
+
+/**
+ * Converts a Jira timeSpent string (e.g. "1h 30m", "45m", "2h") to decimal hours.
+ * Minutes are divided by 60 and added to whole hours (e.g. 25m → 0.4167).
+ */
+function parseTimeSpentHours_(timeSpent) {
+    if (!timeSpent) return 0;
+    const h = timeSpent.match(/(\d+)h/);
+    const m = timeSpent.match(/(\d+)m/);
+    return (h ? parseInt(h[1]) : 0) + (m ? parseInt(m[1]) / 60 : 0);
 }
 
 /** Logs all stored user properties to the Apps Script console. Useful for debugging. */
