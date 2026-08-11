@@ -317,16 +317,22 @@ function getWorklogs() {
       extraFetches.push({ issueIdx: idx, startAt: s });
     }
   });
-  if (extraFetches.length > 0) {
-    UrlFetchApp.fetchAll(extraFetches.map(f => ({
-      url: `${JIRA_URL}/rest/api/3/issue/${allIssues[f.issueIdx].key}/worklog?startAt=${f.startAt}&maxResults=100`,
-      headers: { Authorization: authHeader }, method: 'get', muteHttpExceptions: true
-    }))).forEach((resp, i) => {
+  // Fetch extra worklog pages sequentially — fetchAll throws on network-level
+  // errors (e.g. rate limiting) and can't be caught per-request.
+  for (const f of extraFetches) {
+    try {
+      const resp = UrlFetchApp.fetch(
+        `${JIRA_URL}/rest/api/3/issue/${allIssues[f.issueIdx].key}/worklog?startAt=${f.startAt}&maxResults=100`,
+        { headers: { Authorization: authHeader }, method: 'get', muteHttpExceptions: true }
+      );
+      if (resp.getResponseCode() >= 400) continue;
       const data = JSON.parse(resp.getContentText());
-      if (!data.worklogs) return;
-      const wl = allIssues[extraFetches[i].issueIdx].fields.worklog;
+      if (!data.worklogs) continue;
+      const wl = allIssues[f.issueIdx].fields.worklog;
       wl.worklogs = (wl.worklogs || []).concat(data.worklogs);
-    });
+    } catch (e) {
+      Logger.log(`getWorklogs: skipping extra page for ${allIssues[f.issueIdx].key} startAt=${f.startAt}: ${e.message}`);
+    }
   }
 
   const rows = [];
