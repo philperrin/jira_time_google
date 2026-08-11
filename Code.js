@@ -11,6 +11,46 @@ function include(filename) {
 
 /*
 -----------------------------------------------
+00: Server-side config functions for the standalone web app.
+-----------------------------------------------
+*/
+/** Returns the email address of the active user. */
+function getUserEmail() {
+  return Session.getActiveUser().getEmail();
+}
+
+/** Returns the current Jira configuration (URL and whether an API key is set). */
+function getConfig() {
+  const props = getUserProperties();
+  return {
+    jiraUrl: props.getProperty('JIRA_BASE_URL') || '',
+    hasApiKey: !!props.getProperty('JIRA_API_KEY')
+  };
+}
+
+/** Saves the Jira base URL, trimmed and without trailing slash. */
+function saveJiraUrl(url) {
+  getUserProperties().setProperty('JIRA_BASE_URL', url.trim().replace(/\/$/, ''));
+}
+
+/** Saves the Jira API key. */
+function saveApiKey(key) {
+  getUserProperties().setProperty('JIRA_API_KEY', key.trim());
+}
+
+/** Returns the allocation data (project-to-hours mapping) from user properties. */
+function getAllocation() {
+  const raw = getUserProperties().getProperty('ALLOCATION');
+  return raw ? JSON.parse(raw) : [];
+}
+
+/** Saves the allocation data as a JSON string in user properties. */
+function saveAllocation(rows) {
+  getUserProperties().setProperty('ALLOCATION', JSON.stringify(rows));
+}
+
+/*
+-----------------------------------------------
 00: Adds UI menu options to the sheet.
 -----------------------------------------------
 */
