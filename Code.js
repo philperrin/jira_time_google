@@ -517,6 +517,14 @@ function sendTimeEntries(entries) {
   return { succeeded, failed, errors };
 }
 
+/**
+ * Returns the list of project keys from the allocation data.
+ * Derives from getAllocation() which contains the current user's project allocation.
+ */
+function getProjectKeys() {
+  return getAllocation().map(r => r.projectKey).filter(Boolean);
+}
+
 /*
 -----------------------------------------------
 05: Open a modal dialog for creating a new Jira issue. On submit, the Jira

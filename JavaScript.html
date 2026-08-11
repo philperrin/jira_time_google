@@ -258,4 +258,35 @@
       })
       .scheduleCalendarEvents(toSchedule);
   }
+
+  // ── Create Issue Tab ─────────────────────────────────────────
+  document.querySelector('[data-tab="create-issue"]').addEventListener('click', () => {
+    google.script.run.withSuccessHandler(keys => {
+      const sel = document.getElementById('ci-project');
+      sel.innerHTML = keys.map(k => `<option value="${k}">${k}</option>`).join('');
+    }).getProjectKeys();
+  });
+
+  function submitNewIssue() {
+    const formData = {
+      input1: document.getElementById('ci-project').value,
+      input2: document.getElementById('ci-technology').value,
+      input3: document.getElementById('ci-worktype').value,
+      input4: document.getElementById('ci-summary').value,
+      input6: document.getElementById('ci-issuetype').value,
+      input7: document.getElementById('ci-priority').value,
+      notes: document.getElementById('ci-description').value
+    };
+    setLoading('ci-submit-btn', true, 'Create Issue');
+    google.script.run
+      .withSuccessHandler(msg => {
+        setLoading('ci-submit-btn', false, 'Create Issue');
+        showStatus('ci-status', msg, msg.startsWith('Error') ? 'error' : 'success');
+      })
+      .withFailureHandler(e => {
+        setLoading('ci-submit-btn', false, 'Create Issue');
+        showStatus('ci-status', 'Error: ' + e.message, 'error');
+      })
+      .makeJira(formData);
+  }
 </script>

@@ -1,1 +1,53 @@
-<!-- Create Issue tab -->
+<h2 class="section-title">Create Jira Issue</h2>
+<div style="max-width:500px;">
+  <div class="form-group">
+    <label>Project</label>
+    <select id="ci-project"></select>
+  </div>
+  <div class="form-group">
+    <label>Technology</label>
+    <select id="ci-technology">
+      <option value=""></option>
+      <option>AIMS</option><option>ArcGIS</option><option>Atlan</option>
+      <option>AWS Glue</option><option>BI Support</option><option>dbt</option>
+      <option>DQLabs</option><option>HeyWM</option><option>HVR</option>
+      <option>Informatica</option><option>InfoSphere</option><option>Matillion</option>
+      <option>Newton Insights</option><option>Power Apps</option><option>Power Automate</option>
+      <option>Power BI</option><option>Qlik</option><option>Sigma</option>
+      <option>Snowflake</option><option>Spotfire</option><option>Tableau</option>
+    </select>
+  </div>
+  <div class="form-group">
+    <label>MS ElasticOps Work Type</label>
+    <select id="ci-worktype">
+      <option value=""></option>
+      <option>AdvOps</option>
+      <option>Core</option>
+    </select>
+  </div>
+  <div class="form-group">
+    <label>Issue Type</label>
+    <select id="ci-issuetype">
+      <option value="Task">Task</option>
+      <option value="Support">Incident</option>
+    </select>
+  </div>
+  <div class="form-group">
+    <label>Priority</label>
+    <select id="ci-priority">
+      <option value="10002">P-3 Low</option>
+      <option value="10001" selected>P-2 Medium</option>
+      <option value="10000">P-1 High</option>
+    </select>
+  </div>
+  <div class="form-group">
+    <label>Summary</label>
+    <input type="text" id="ci-summary">
+  </div>
+  <div class="form-group">
+    <label>Description</label>
+    <textarea id="ci-description" rows="4"></textarea>
+  </div>
+  <button class="btn btn-primary" id="ci-submit-btn" onclick="submitNewIssue()">Create Issue</button>
+  <div id="ci-status" class="status-msg"></div>
+</div>
