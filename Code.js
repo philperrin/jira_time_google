@@ -527,6 +527,79 @@ function getProjectKeys() {
 
 /*
 -----------------------------------------------
+04: Fetch worklogs logged by the current user since Jan 1 of the current year.
+Returns an array of objects with projectKey, issueKey, summary, timeSpent,
+started (ISO), hours, and month.
+-----------------------------------------------
+*/
+/**
+ * Fetches worklogs for the current user from Jan 1 of the current year.
+ * Returns an array of {projectKey, issueKey, summary, timeSpent, started, hours, month}.
+ * Handles paginated issue results (nextPageToken) and paginated worklog fields (fetchAll).
+ */
+function getWorklogs() {
+  const JIRA_URL = getUserProperties().getProperty('JIRA_BASE_URL');
+  const authHeader = getAuthHeader_();
+  const userEmail = Session.getActiveUser().getEmail();
+  const currentYear = new Date().getFullYear();
+  const fromDate = `${currentYear}-01-01`;
+  const fromTimestamp = new Date(currentYear, 0, 1).getTime();
+  const JQL = encodeURIComponent(`worklogAuthor=currentUser() AND worklogDate >= ${fromDate}`);
+  const BASE_ENDPOINT = `${JIRA_URL}/rest/api/3/search/jql?fields=key,summary,worklog,project&jql=${JQL}&maxResults=100`;
+  const fetchOpts = { headers: { Authorization: authHeader }, method: 'get', muteHttpExceptions: true };
+
+  let allIssues = [];
+  let nextPageToken = null;
+  do {
+    const endpoint = nextPageToken ? `${BASE_ENDPOINT}&nextPageToken=${nextPageToken}` : BASE_ENDPOINT;
+    const data = JSON.parse(UrlFetchApp.fetch(endpoint, fetchOpts).getContentText());
+    if (data.issues) allIssues = allIssues.concat(data.issues);
+    nextPageToken = data.nextPageToken || null;
+  } while (nextPageToken);
+
+  const extraFetches = [];
+  allIssues.forEach((issue, idx) => {
+    const wl = issue.fields.worklog;
+    if (!wl) return;
+    for (let s = wl.worklogs ? wl.worklogs.length : 0; s < (wl.total || 0); s += 100) {
+      extraFetches.push({ issueIdx: idx, startAt: s });
+    }
+  });
+  if (extraFetches.length > 0) {
+    UrlFetchApp.fetchAll(extraFetches.map(f => ({
+      url: `${JIRA_URL}/rest/api/3/issue/${allIssues[f.issueIdx].key}/worklog?startAt=${f.startAt}&maxResults=100`,
+      headers: { Authorization: authHeader }, method: 'get', muteHttpExceptions: true
+    }))).forEach((resp, i) => {
+      const data = JSON.parse(resp.getContentText());
+      if (!data.worklogs) return;
+      const wl = allIssues[extraFetches[i].issueIdx].fields.worklog;
+      wl.worklogs = (wl.worklogs || []).concat(data.worklogs);
+    });
+  }
+
+  const rows = [];
+  allIssues.forEach(issue => {
+    const projectKey = issue.fields.project.key;
+    const issueKey = issue.key;
+    const summary = issue.fields.summary;
+    (issue.fields.worklog && issue.fields.worklog.worklogs || []).forEach(log => {
+      if (!log.author || log.author.emailAddress !== userEmail) return;
+      const startedDate = new Date(log.started || '');
+      if (!log.started || startedDate.getTime() < fromTimestamp) return;
+      rows.push({
+        projectKey, issueKey, summary,
+        timeSpent: log.timeSpent || '',
+        started: log.started,
+        hours: parseTimeSpentHours_(log.timeSpent || ''),
+        month: `${startedDate.getFullYear()}-${String(startedDate.getMonth() + 1).padStart(2, '0')}`
+      });
+    });
+  });
+  return rows;
+}
+
+/*
+-----------------------------------------------
 05: Open a modal dialog for creating a new Jira issue. On submit, the Jira
 REST API is called to create the issue and the Assignments sheet is refreshed.
 -----------------------------------------------

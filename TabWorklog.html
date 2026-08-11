@@ -1,1 +1,14 @@
-<!-- Worklog tab -->
+<h2 class="section-title">Worklog (YTD)</h2>
+<div class="toolbar">
+  <button class="btn btn-primary" id="wl-load-btn" onclick="loadWorklog()">Pull Worklog</button>
+  <span id="wl-count" style="color:#5f6368;font-size:13px;"></span>
+</div>
+<div id="wl-status" class="status-msg"></div>
+<table id="wl-table" style="display:none;margin-top:16px;">
+  <thead>
+    <tr>
+      <th>Month</th><th>Project</th><th>Issue</th><th>Summary</th><th>Time Spent</th><th>Hours</th><th>Started</th>
+    </tr>
+  </thead>
+  <tbody id="wl-body"></tbody>
+</table>

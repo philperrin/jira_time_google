@@ -289,4 +289,26 @@
       })
       .makeJira(formData);
   }
+
+  // ── Worklog Tab ──────────────────────────────────────────────
+  function loadWorklog() {
+    setLoading('wl-load-btn', true, 'Pull Worklog');
+    showStatus('wl-status', 'Fetching worklogs for this year…', 'info');
+    google.script.run
+      .withSuccessHandler(rows => {
+        setLoading('wl-load-btn', false, 'Pull Worklog');
+        const tbody = document.getElementById('wl-body');
+        tbody.innerHTML = rows.map(r =>
+          `<tr><td>${r.month}</td><td>${r.projectKey}</td><td>${r.issueKey}</td><td>${r.summary}</td><td>${r.timeSpent}</td><td>${r.hours.toFixed(2)}</td><td>${r.started.slice(0,10)}</td></tr>`
+        ).join('');
+        document.getElementById('wl-table').style.display = '';
+        document.getElementById('wl-count').textContent = `${rows.length} entries`;
+        showStatus('wl-status', '', '');
+      })
+      .withFailureHandler(e => {
+        setLoading('wl-load-btn', false, 'Pull Worklog');
+        showStatus('wl-status', 'Error: ' + e.message, 'error');
+      })
+      .getWorklogs();
+  }
 </script>
