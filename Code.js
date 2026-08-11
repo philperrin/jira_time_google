@@ -455,6 +455,68 @@ function importCalendarEvents(startDateStr, endDateStr) {
   return events;
 }
 
+/**
+ * Sends time entries to Jira as worklogs.
+ * @param {Array<{date: string, issueKey: string, startTime: string, durationHours: number}>} entries
+ * @returns {{succeeded: number, failed: number, errors: Array<string>}}
+ */
+function sendTimeEntries(entries) {
+  const JIRA_URL = getUserProperties().getProperty('JIRA_BASE_URL');
+  const authHeader = getAuthHeader_();
+  const UTC_FORMAT = "yyyy-MM-dd'T'HH:mm:ss'.000+0000'";
+  let succeeded = 0, failed = 0;
+  const errors = [];
+
+  entries.forEach(entry => {
+    // Skip entries with no issue key
+    if (!entry.issueKey) return;
+
+    // Manually parse startTime (hh:mm a format) since V8 doesn't correctly parse combined datetime strings
+    // Extract AM/PM and time portion
+    const timeParts = entry.startTime.trim().split(' ');
+    const ampm = timeParts[timeParts.length - 1].toUpperCase();
+    const timePortion = timeParts.slice(0, -1).join(' '); // In case time has spaces
+    const [hoursStr, minutesStr] = timePortion.split(':');
+    let hours = parseInt(hoursStr, 10);
+    const minutes = parseInt(minutesStr, 10);
+
+    // Adjust for AM/PM
+    if (ampm === 'PM' && hours !== 12) {
+      hours += 12;
+    } else if (ampm === 'AM' && hours === 12) {
+      hours = 0;
+    }
+
+    // Create a Date object from the date string and set the time
+    const combined = new Date(entry.date + 'T00:00:00');
+    combined.setHours(hours, minutes, 0, 0);
+
+    // Format to UTC
+    const utcString = Utilities.formatDate(combined, 'Etc/GMT', UTC_FORMAT);
+    const durationMinutes = Math.round(entry.durationHours * 60);
+    const options = {
+      method: 'post',
+      headers: { Authorization: authHeader, 'Content-Type': 'application/json' },
+      payload: JSON.stringify({ started: utcString, timeSpent: `${durationMinutes}m` }),
+      muteHttpExceptions: true
+    };
+    try {
+      const resp = UrlFetchApp.fetch(`${JIRA_URL}/rest/api/3/issue/${entry.issueKey}/worklog`, options);
+      if (resp.getResponseCode() === 201) {
+        succeeded++;
+      } else {
+        failed++;
+        errors.push(`${entry.issueKey}: HTTP ${resp.getResponseCode()}`);
+      }
+    } catch (e) {
+      failed++;
+      errors.push(`${entry.issueKey}: ${e.message}`);
+    }
+  });
+
+  return { succeeded, failed, errors };
+}
+
 /*
 -----------------------------------------------
 05: Open a modal dialog for creating a new Jira issue. On submit, the Jira
