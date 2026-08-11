@@ -1,1 +1,25 @@
-<!-- Assignments tab -->
+<h2 class="section-title">Assignments</h2>
+<div class="toolbar">
+  <button class="btn btn-primary" id="assignments-load-btn" onclick="loadAssignments()">Load Assignments</button>
+  <span id="assignments-count" style="color:#5f6368;font-size:13px;"></span>
+</div>
+<div id="assignments-status" class="status-msg"></div>
+
+<table id="assignments-table" style="display:none;">
+  <thead>
+    <tr>
+      <th>Key</th>
+      <th>Name</th>
+      <th>Project</th>
+      <th>Status</th>
+      <th>Time Logged (h)</th>
+      <th>Schedule (h)</th>
+    </tr>
+  </thead>
+  <tbody id="assignments-body"></tbody>
+</table>
+
+<div id="schedule-toolbar" style="display:none;margin-top:16px;" class="toolbar">
+  <button class="btn btn-secondary" onclick="scheduleEvents()">⏱ Schedule Calendar Events</button>
+</div>
+<div id="schedule-status" class="status-msg"></div>

@@ -82,4 +82,73 @@
 
   // Load config when tab is clicked
   document.querySelector('[data-tab="config"]').addEventListener('click', loadConfig);
+
+  // ── Assignments Tab ──────────────────────────────────────────
+  window.loadedIssues = [];
+
+  function loadAssignments() {
+    setLoading('assignments-load-btn', true, 'Load Assignments');
+    showStatus('assignments-status', 'Fetching from Jira…', 'info');
+    google.script.run
+      .withSuccessHandler(issues => {
+        window.loadedIssues = issues;
+        renderAssignments(issues);
+        setLoading('assignments-load-btn', false, 'Load Assignments');
+        document.getElementById('assignments-count').textContent = `${issues.length} issues`;
+        showStatus('assignments-status', '', '');
+      })
+      .withFailureHandler(e => {
+        setLoading('assignments-load-btn', false, 'Load Assignments');
+        showStatus('assignments-status', 'Error: ' + e.message, 'error');
+      })
+      .getJiraIssues();
+  }
+
+  function renderAssignments(issues) {
+    const tbody = document.getElementById('assignments-body');
+    tbody.innerHTML = '';
+    issues.forEach((issue, idx) => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td><a href="${issue.link}" target="_blank">${issue.key}</a></td>
+        <td>${issue.name}</td>
+        <td>${issue.project}</td>
+        <td>${issue.status}</td>
+        <td>${issue.timeLogged}</td>
+        <td><input type="number" min="0" step="0.25" style="width:80px;" data-idx="${idx}" class="schedule-input" placeholder="0"></td>`;
+      tbody.appendChild(tr);
+    });
+    document.getElementById('assignments-table').style.display = '';
+    document.getElementById('schedule-toolbar').style.display = '';
+  }
+
+  function scheduleEvents() {
+    const toSchedule = [];
+    document.querySelectorAll('.schedule-input').forEach(input => {
+      const idx = parseInt(input.dataset.idx);
+      const hours = parseFloat(input.value) || 0;
+      if (hours > 0 && idx >= 0 && idx < window.loadedIssues.length) {
+        toSchedule.push({
+          ...window.loadedIssues[idx],
+          scheduleHours: hours
+        });
+      }
+    });
+    if (toSchedule.length === 0) {
+      showStatus('schedule-status', 'No hours to schedule.', 'info');
+      return;
+    }
+    setLoading('schedule-toolbar', true, '⏱ Schedule Calendar Events');
+    showStatus('schedule-status', 'Scheduling…', 'info');
+    google.script.run
+      .withSuccessHandler(() => {
+        setLoading('schedule-toolbar', false, '⏱ Schedule Calendar Events');
+        showStatus('schedule-status', 'Scheduled ' + toSchedule.length + ' event(s)!', 'success');
+      })
+      .withFailureHandler(e => {
+        setLoading('schedule-toolbar', false, '⏱ Schedule Calendar Events');
+        showStatus('schedule-status', 'Error: ' + e.message, 'error');
+      })
+      .scheduleCalendarEvents(toSchedule);
+  }
 </script>
