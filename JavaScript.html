@@ -21,4 +21,65 @@
     btn.disabled = loading;
     btn.textContent = loading ? 'Loading…' : label;
   }
+
+  // ── Config Tab ──────────────────────────────────────────────
+  function loadConfig() {
+    google.script.run
+      .withSuccessHandler(cfg => {
+        document.getElementById('cfg-jira-url').value = cfg.jiraUrl;
+        document.getElementById('cfg-api-key-status').textContent = cfg.hasApiKey ? '✓ API key saved' : 'No API key saved';
+      })
+      .getConfig();
+    google.script.run
+      .withSuccessHandler(renderAllocationTable)
+      .getAllocation();
+  }
+
+  function saveConfig() {
+    const url = document.getElementById('cfg-jira-url').value.trim();
+    const key = document.getElementById('cfg-api-key').value.trim();
+    setLoading('cfg-save-btn', true, 'Save');
+    let pending = 0;
+    function done() { if (--pending === 0) { setLoading('cfg-save-btn', false, 'Save'); showStatus('cfg-status', 'Saved!', 'success'); } }
+    if (url) { pending++; google.script.run.withSuccessHandler(done).saveJiraUrl(url); }
+    if (key) { pending++; google.script.run.withSuccessHandler(done).saveApiKey(key); }
+    if (!pending) showStatus('cfg-status', 'Nothing to save.', 'info');
+  }
+
+  function renderAllocationTable(rows) {
+    const tbody = document.getElementById('allocation-body');
+    tbody.innerHTML = '';
+    (rows || []).forEach(row => addAllocationRow(row));
+  }
+
+  function addAllocationRow(data) {
+    const tbody = document.getElementById('allocation-body');
+    const tr = document.createElement('tr');
+    const fields = ['colorNum','projectKey','colorLabel','projectName','hoursPerWeek','colorEnumName'];
+    const placeholders = ['1–11','CEOT','Orange','CFA Project','20','ORANGE'];
+    tr.innerHTML = fields.map((f,i) => `<td><input type="text" style="width:100%" name="${f}" value="${(data && data[f]) || ''}" placeholder="${placeholders[i]}"></td>`).join('') +
+      `<td><button class="btn" style="padding:4px 8px;" onclick="this.closest('tr').remove()">✕</button></td>`;
+    tbody.appendChild(tr);
+  }
+
+  function saveAllocationTable() {
+    const rows = Array.from(document.querySelectorAll('#allocation-body tr')).map(tr => {
+      const inputs = tr.querySelectorAll('input');
+      return {
+        colorNum: inputs[0].value.trim(),
+        projectKey: inputs[1].value.trim(),
+        colorLabel: inputs[2].value.trim(),
+        projectName: inputs[3].value.trim(),
+        hoursPerWeek: parseFloat(inputs[4].value) || 0,
+        colorEnumName: inputs[5].value.trim().toUpperCase()
+      };
+    }).filter(r => r.projectKey);
+    google.script.run
+      .withSuccessHandler(() => showStatus('allocation-status', 'Allocation saved.', 'success'))
+      .withFailureHandler(e => showStatus('allocation-status', 'Error: ' + e.message, 'error'))
+      .saveAllocation(rows);
+  }
+
+  // Load config when tab is clicked
+  document.querySelector('[data-tab="config"]').addEventListener('click', loadConfig);
 </script>
