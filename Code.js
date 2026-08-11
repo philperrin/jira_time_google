@@ -51,6 +51,51 @@ function saveAllocation(rows) {
 
 /*
 -----------------------------------------------
+00: Fetch active Jira issues for the standalone web app.
+-----------------------------------------------
+*/
+/**
+ * Fetches active Jira issues assigned to or watched by the current user.
+ * Returns an array of issues with dropdownValue, key, link, projectKey, name,
+ * status, project, and timeLogged (in hours).
+ */
+function getJiraIssues() {
+  const JIRA_URL = getUserProperties().getProperty('JIRA_BASE_URL');
+  const USER_EMAIL = Session.getActiveUser().getEmail();
+  const authHeader = getAuthHeader_();
+  const BASE_ENDPOINT = `${JIRA_URL}/rest/api/3/search/jql?jql=(assignee=currentUser()+OR+watcher=currentUser())+AND+issuetype+IN+(Story,Task,Sub-Task)+AND+(status!=Done+OR+(status=Done+AND+updated%3E=-7d))+ORDER+BY+key+ASC&fields=key,summary,status,project&maxResults=100`;
+  const options = { headers: { Authorization: authHeader }, method: 'get', muteHttpExceptions: true };
+
+  let allIssues = [];
+  let nextPageToken = null;
+  do {
+    const endpoint = nextPageToken ? `${BASE_ENDPOINT}&nextPageToken=${nextPageToken}` : BASE_ENDPOINT;
+    const data = JSON.parse(UrlFetchApp.fetch(endpoint, options).getContentText());
+    if (data.issues) allIssues = allIssues.concat(data.issues);
+    nextPageToken = data.nextPageToken || null;
+  } while (nextPageToken);
+
+  const filtered = allIssues.filter(issue => {
+    const name = issue.fields.project.name;
+    return !name.includes('Archive') && !name.includes('Managed Services Internal');
+  });
+
+  const worklogTotals = getWorklogTotals_(filtered.map(i => i.key), authHeader, JIRA_URL, USER_EMAIL);
+
+  return filtered.map((issue, idx) => ({
+    dropdownValue: `${issue.key} (${issue.fields.summary})`,
+    key: issue.key,
+    link: `${JIRA_URL}/browse/${issue.key}`,
+    projectKey: issue.key.split('-')[0],
+    name: issue.fields.summary,
+    status: issue.fields.status.name,
+    project: issue.fields.project.name,
+    timeLogged: Math.round((worklogTotals[idx] / 3600) * 100) / 100
+  }));
+}
+
+/*
+-----------------------------------------------
 00: Adds UI menu options to the sheet.
 -----------------------------------------------
 */
