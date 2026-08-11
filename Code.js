@@ -353,98 +353,57 @@ function importCalendarEventsToSheet() {
     hRange.setFormulas(hFormulas);
 }
 
-/*
------------------------------------------------
-04: Read "Schedule Time" values (column I) from the Assignments sheet and
-create sequential Google Calendar events starting at the next full hour.
-Each event's title is the Jira Project (column D) and its description is
-the Dropdown Value (column A). Events are stacked back-to-back.
------------------------------------------------
-*/
 /**
- * Creates Google Calendar events for each row in the Assignments sheet that
- * has a numeric value in the "Schedule Time" column (I). Events are scheduled
- * sequentially starting at the next full hour from now. After creating events,
- * the Schedule Time column is cleared.
+ * Creates Google Calendar events from the provided toSchedule array.
+ * Each event's title is the jiraProject, description includes dropdownValue and JIRA link.
+ * Events are scheduled sequentially starting at the next full hour from now.
+ * Returns { created: number, startTime: string }
  */
-function scheduleCalendarEvents() {
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
-    const JIRA_URL = getUserProperties().getProperty('JIRA_BASE_URL');
-    const sheet = ss.getSheetByName('Assignments');
-    const lastRow = sheet.getLastRow();
-    if (lastRow < 2) {
-        SpreadsheetApp.getUi().alert('No data found in the Assignments sheet.');
-        return;
-    }
+function scheduleCalendarEvents(toSchedule) {
+  const JIRA_URL = getUserProperties().getProperty('JIRA_BASE_URL');
+  const allocation = getAllocation();
 
-    // Build project key → EventColor from Allocation columns B (col 2) and G (col 7).
-    const allocationSheet = ss.getSheetByName('Allocation');
-    const allocationLastRow = allocationSheet.getLastRow();
-    const allocationData = allocationLastRow >= 2
-        ? allocationSheet.getRange(2, 2, allocationLastRow - 1, 6).getValues()
-        : [];
-    const COLOR_ENUM_MAP = {
-        'pale blue': CalendarApp.EventColor.PALE_BLUE,
-        'pale green': CalendarApp.EventColor.PALE_GREEN,
-        'mauve': CalendarApp.EventColor.MAUVE,
-        'pale red': CalendarApp.EventColor.PALE_RED,
-        'yellow': CalendarApp.EventColor.YELLOW,
-        'orange': CalendarApp.EventColor.ORANGE,
-        'cyan': CalendarApp.EventColor.CYAN,
-        'gray': CalendarApp.EventColor.GRAY,
-        'grey': CalendarApp.EventColor.GRAY,
-        'blue': CalendarApp.EventColor.BLUE,
-        'green': CalendarApp.EventColor.GREEN,
-        'red': CalendarApp.EventColor.RED
-    };
-    // allocationData columns (0-indexed): 0=B (project key), 5=G (color name)
-    const projectColorMap = Object.fromEntries(
-        allocationData
-            .filter(row => row[0] !== '')
-            .map(row => [row[0], COLOR_ENUM_MAP[String(row[5]).trim().toLowerCase()] || null])
+  const COLOR_ENUM_MAP = {
+    'PALE_BLUE': CalendarApp.EventColor.PALE_BLUE,
+    'PALE_GREEN': CalendarApp.EventColor.PALE_GREEN,
+    'MAUVE': CalendarApp.EventColor.MAUVE,
+    'PALE_RED': CalendarApp.EventColor.PALE_RED,
+    'YELLOW': CalendarApp.EventColor.YELLOW,
+    'ORANGE': CalendarApp.EventColor.ORANGE,
+    'CYAN': CalendarApp.EventColor.CYAN,
+    'GRAY': CalendarApp.EventColor.GRAY,
+    'GREY': CalendarApp.EventColor.GRAY,
+    'BLUE': CalendarApp.EventColor.BLUE,
+    'GREEN': CalendarApp.EventColor.GREEN,
+    'RED': CalendarApp.EventColor.RED
+  };
+
+  const projectColorMap = Object.fromEntries(
+    allocation
+      .filter(r => r.projectKey)
+      .map(r => [r.projectKey, COLOR_ENUM_MAP[r.colorEnumName] || null])
+  );
+
+  const now = new Date();
+  const startTime = new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours() + 1, 0, 0, 0);
+  const calendar = CalendarApp.getDefaultCalendar();
+  let cursor = new Date(startTime);
+
+  toSchedule.forEach(entry => {
+    const durationMs = entry.hours * 60 * 60 * 1000;
+    const endTime = new Date(cursor.getTime() + durationMs);
+    const event = calendar.createEvent(
+      entry.jiraProject,
+      cursor,
+      endTime,
+      { description: `${entry.dropdownValue}\n${JIRA_URL}/browse/${entry.key}` }
     );
+    const color = projectColorMap[entry.jiraProject];
+    if (color) event.setColor(color);
+    cursor = endTime;
+  });
 
-    const numRows = lastRow - 1;
-    const data = sheet.getRange(2, 1, numRows, 9).getValues();
-
-    // Collect rows that have a positive numeric Schedule Time value.
-    const toSchedule = data.reduce((acc, row, i) => {
-        const scheduleTime = row[8]; // column I (0-indexed: 8)
-        if (typeof scheduleTime === 'number' && scheduleTime > 0) {
-            acc.push({ rowIndex: i + 2, dropdownValue: row[0], key: row[1], jiraProject: row[3], hours: scheduleTime });
-        }
-        return acc;
-    }, []);
-
-    if (toSchedule.length === 0) {
-        SpreadsheetApp.getUi().alert('No Schedule Time values found. Enter a numeric value in column I for the rows you want to schedule.');
-        return;
-    }
-
-    // Start time = next full hour from now.
-    const now = new Date();
-    const startTime = new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours() + 1, 0, 0, 0);
-
-    const calendar = CalendarApp.getDefaultCalendar();
-    let cursor = new Date(startTime);
-    const created = [];
-
-    toSchedule.forEach(entry => {
-        const durationMs = entry.hours * 60 * 60 * 1000;
-        const endTime = new Date(cursor.getTime() + durationMs);
-        const event = calendar.createEvent(entry.jiraProject, cursor, endTime, { description: `${entry.dropdownValue}\n${JIRA_URL}/browse/${entry.key}` });
-        const eventColor = projectColorMap[entry.jiraProject];
-        if (eventColor) event.setColor(eventColor);
-        created.push(entry.rowIndex);
-        cursor = endTime;
-    });
-
-    // Clear Schedule Time values for rows that were processed.
-    created.forEach(rowIndex => {
-        sheet.getRange(rowIndex, 9).clearContent();
-    });
-
-    SpreadsheetApp.getUi().alert(`Created ${created.length} calendar event(s) starting at ${startTime.toLocaleTimeString()}.`);
+  return { created: toSchedule.length, startTime: startTime.toLocaleTimeString() };
 }
 
 /*

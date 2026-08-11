@@ -138,15 +138,16 @@
       }
     });
     if (toSchedule.length === 0) {
-      showStatus('schedule-status', 'No hours to schedule.', 'info');
+      showStatus('schedule-status', 'Enter hours in the Schedule column first.', 'info');
       return;
     }
     setLoading('schedule-toolbar', true, '⏱ Schedule Calendar Events');
-    showStatus('schedule-status', 'Scheduling…', 'info');
+    showStatus('schedule-status', 'Creating calendar events…', 'info');
     google.script.run
-      .withSuccessHandler(() => {
+      .withSuccessHandler(result => {
         setLoading('schedule-toolbar', false, '⏱ Schedule Calendar Events');
-        showStatus('schedule-status', 'Scheduled ' + toSchedule.length + ' event(s)!', 'success');
+        showStatus('schedule-status', `Created ${result.created} event(s) starting at ${result.startTime}.`, 'success');
+        document.querySelectorAll('.schedule-input').forEach(i => i.value = '');
       })
       .withFailureHandler(e => {
         setLoading('schedule-toolbar', false, '⏱ Schedule Calendar Events');
