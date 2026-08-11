@@ -1,8 +1,13 @@
 function doGet() {
+  const FILE_ID = '1FJo2Y9M0tnVX9hkbzd9vrbvdTrPeb_jK';
+  const faviconUrl = `https://drive.google.com/uc?id=${FILE_ID}&export=download&format=png`;
+
+
   return HtmlService.createTemplateFromFile('Index')
     .evaluate()
     .setTitle('Jira Time Tracker')
-    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
+    .setFaviconUrl(faviconUrl);
 }
 
 function include(filename) {
