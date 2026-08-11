@@ -25,7 +25,11 @@
 
   (function initDensity() {
     const saved = localStorage.getItem('jtt-density') || 'comfortable';
-    document.addEventListener('DOMContentLoaded', () => setDensity(saved));
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', () => setDensity(saved));
+    } else {
+      setDensity(saved);
+    }
   })();
 
   document.querySelectorAll('.tab-btn').forEach(btn => {
