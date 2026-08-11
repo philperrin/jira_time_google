@@ -3,6 +3,31 @@
     return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
 
+  function setDensity(mode) {
+    const container = document.getElementById('assignments-container');
+    if (container) {
+      container.classList.remove('density-comfortable', 'density-compact');
+      container.classList.add('density-' + mode);
+    }
+    const comfortBtn = document.getElementById('density-comfortable-btn');
+    const compactBtn = document.getElementById('density-compact-btn');
+    if (comfortBtn && compactBtn) {
+      if (mode === 'compact') {
+        comfortBtn.className = 'btn btn-secondary';
+        compactBtn.className = 'btn btn-primary';
+      } else {
+        comfortBtn.className = 'btn btn-primary';
+        compactBtn.className = 'btn btn-secondary';
+      }
+    }
+    localStorage.setItem('jtt-density', mode);
+  }
+
+  (function initDensity() {
+    const saved = localStorage.getItem('jtt-density') || 'comfortable';
+    document.addEventListener('DOMContentLoaded', () => setDensity(saved));
+  })();
+
   document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -217,21 +242,48 @@
   }
 
   function renderAssignments(issues) {
-    const tbody = document.getElementById('assignments-body');
-    tbody.innerHTML = '';
+    const container = document.getElementById('assignments-container');
+    container.innerHTML = '';
+
+    const groups = [];
+    const groupMap = {};
     issues.forEach((issue, idx) => {
-      const tr = document.createElement('tr');
-      tr.innerHTML = `
-        <td><a href="${esc(issue.link)}" target="_blank">${esc(issue.key)}</a></td>
-        <td>${esc(issue.name)}</td>
-        <td>${esc(issue.project)}</td>
-        <td>${esc(issue.status)}</td>
-        <td>${esc(issue.timeLogged)}</td>
-        <td><input type="number" min="0" step="0.25" style="width:80px;" data-idx="${idx}" class="schedule-input" placeholder="0"></td>`;
-      tbody.appendChild(tr);
+      const key = issue.projectKey || 'Unknown';
+      if (!groupMap[key]) {
+        groupMap[key] = [];
+        groups.push(key);
+      }
+      groupMap[key].push({ issue, idx });
     });
-    document.getElementById('assignments-table').style.display = '';
+
+    groups.forEach(projectKey => {
+      const heading = document.createElement('h3');
+      heading.className = 'project-heading';
+      heading.textContent = projectKey;
+      container.appendChild(heading);
+
+      const table = document.createElement('table');
+      table.innerHTML = `<thead><tr>
+        <th>Key</th><th>Name</th><th>Status</th><th>Time Logged (h)</th><th>Schedule (h)</th>
+      </tr></thead>`;
+      const tbody = document.createElement('tbody');
+      groupMap[projectKey].forEach(({ issue, idx }) => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td><a href="${esc(issue.link)}" target="_blank">${esc(issue.key)}</a></td>
+          <td>${esc(issue.name)}</td>
+          <td>${esc(issue.status)}</td>
+          <td>${esc(issue.timeLogged)}</td>
+          <td><input type="number" min="0" step="0.25" style="width:80px;" data-idx="${idx}" class="schedule-input" placeholder="0"></td>`;
+        tbody.appendChild(tr);
+      });
+      table.appendChild(tbody);
+      container.appendChild(table);
+    });
+
+    container.style.display = '';
     document.getElementById('schedule-toolbar').style.display = '';
+    setDensity(localStorage.getItem('jtt-density') || 'comfortable');
   }
 
   function scheduleEvents() {
