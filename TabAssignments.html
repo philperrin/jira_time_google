@@ -2,22 +2,13 @@
 <div class="toolbar">
   <button class="btn btn-primary" id="assignments-load-btn" onclick="loadAssignments()">Load Assignments</button>
   <span id="assignments-count" style="color:#5f6368;font-size:13px;"></span>
+  <span style="flex:1;"></span>
+  <button class="btn btn-secondary" id="density-comfortable-btn" onclick="setDensity('comfortable')">Comfortable</button>
+  <button class="btn btn-secondary" id="density-compact-btn" onclick="setDensity('compact')">Compact</button>
 </div>
 <div id="assignments-status" class="status-msg"></div>
 
-<table id="assignments-table" style="display:none;">
-  <thead>
-    <tr>
-      <th>Key</th>
-      <th>Name</th>
-      <th>Project</th>
-      <th>Status</th>
-      <th>Time Logged (h)</th>
-      <th>Schedule (h)</th>
-    </tr>
-  </thead>
-  <tbody id="assignments-body"></tbody>
-</table>
+<div id="assignments-container" style="display:none;"></div>
 
 <div id="schedule-toolbar" style="display:none;margin-top:16px;" class="toolbar">
   <button class="btn btn-secondary" id="schedule-btn" onclick="scheduleEvents()">⏱ Schedule Calendar Events</button>
