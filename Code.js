@@ -406,6 +406,55 @@ function scheduleCalendarEvents(toSchedule) {
   return { created: toSchedule.length, startTime: startTime.toLocaleTimeString() };
 }
 
+/**
+ * Imports calendar events for the given date range and returns an array of event objects.
+ * Filters events based on their color mapping to valid project keys.
+ *
+ * @param {string} startDateStr - Start date in "yyyy-MM-dd" format
+ * @param {string} endDateStr - End date in "yyyy-MM-dd" format
+ * @returns {Array} Array of event objects with title, date, start, end, description, status, projectKey, issueKey, duration
+ */
+function importCalendarEvents(startDateStr, endDateStr) {
+  const allocation = getAllocation();
+  const colorMap = Object.fromEntries(
+    allocation.filter(r => r.projectKey && r.colorLabel).map(r => [r.colorNum, r.projectKey])
+  );
+  const validProjectKeys = new Set(
+    allocation.filter(r => r.projectKey && r.colorLabel).map(r => r.projectKey)
+  );
+
+  const CALENDAR_ID = Session.getActiveUser().getEmail();
+  const calendar = CalendarApp.getCalendarById(CALENDAR_ID);
+  const tz = Session.getScriptTimeZone();
+
+  const startDate = new Date(startDateStr + 'T00:00:00');
+  const endDate = new Date(endDateStr + 'T23:59:59');
+
+  const events = calendar.getEvents(startDate, endDate).map(event => {
+    const colorNum = event.getColor();
+    const projectKey = colorMap[colorNum] || '';
+    if (!validProjectKeys.has(projectKey)) return null;
+    const startTime = event.getStartTime();
+    const endTime = event.getEndTime();
+    const durationHours = (endTime - startTime) / 3600000;
+    const description = event.getDescription();
+    const match = description ? description.match(/^[^\n_]+/) : null;
+    return {
+      title: event.getTitle(),
+      date: Utilities.formatDate(startTime, tz, 'yyyy-MM-dd'),
+      start: Utilities.formatDate(startTime, tz, 'hh:mm a'),
+      end: Utilities.formatDate(endTime, tz, 'hh:mm a'),
+      description: match ? match[0].trim() : '',
+      status: event.getMyStatus(),
+      projectKey,
+      issueKey: '',
+      duration: Math.round(durationHours * 4) / 4
+    };
+  }).filter(Boolean);
+
+  return events;
+}
+
 /*
 -----------------------------------------------
 05: Open a modal dialog for creating a new Jira issue. On submit, the Jira
