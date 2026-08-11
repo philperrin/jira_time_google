@@ -61,6 +61,8 @@ function saveAllocation(rows) {
  */
 function getJiraIssues() {
   const JIRA_URL = getUserProperties().getProperty('JIRA_BASE_URL');
+  const JIRA_API_KEY = getUserProperties().getProperty('JIRA_API_KEY');
+  if (!JIRA_URL || !JIRA_API_KEY) throw new Error('Jira URL and API key must be configured in the Config tab.');
   const USER_EMAIL = Session.getActiveUser().getEmail();
   const authHeader = getAuthHeader_();
   const BASE_ENDPOINT = `${JIRA_URL}/rest/api/3/search/jql?jql=(assignee=currentUser()+OR+watcher=currentUser())+AND+issuetype+IN+(Story,Task,Sub-Task)+AND+(status!=Done+OR+(status=Done+AND+updated%3E=-7d))+ORDER+BY+key+ASC&fields=key,summary,status,project&maxResults=100`;
@@ -70,7 +72,9 @@ function getJiraIssues() {
   let nextPageToken = null;
   do {
     const endpoint = nextPageToken ? `${BASE_ENDPOINT}&nextPageToken=${nextPageToken}` : BASE_ENDPOINT;
-    const data = JSON.parse(UrlFetchApp.fetch(endpoint, options).getContentText());
+    const response = UrlFetchApp.fetch(endpoint, options);
+    if (response.getResponseCode() >= 400) throw new Error(`Jira API error (${response.getResponseCode()}): ${response.getContentText()}`);
+    const data = JSON.parse(response.getContentText());
     if (data.issues) allIssues = allIssues.concat(data.issues);
     nextPageToken = data.nextPageToken || null;
   } while (nextPageToken);
@@ -156,6 +160,9 @@ function scheduleCalendarEvents(toSchedule) {
  * @returns {Array} Array of event objects with title, date, start, end, description, status, projectKey, issueKey, duration
  */
 function importCalendarEvents(startDateStr, endDateStr) {
+  const JIRA_URL = getUserProperties().getProperty('JIRA_BASE_URL');
+  const JIRA_API_KEY = getUserProperties().getProperty('JIRA_API_KEY');
+  if (!JIRA_URL || !JIRA_API_KEY) throw new Error('Jira URL and API key must be configured in the Config tab.');
   const allocation = getAllocation();
   const colorMap = Object.fromEntries(
     allocation.filter(r => r.projectKey && r.colorLabel).map(r => [r.colorNum, r.projectKey])
@@ -263,7 +270,7 @@ function sendTimeEntries(entries) {
  * Derives from getAllocation() which contains the current user's project allocation.
  */
 function getProjectKeys() {
-  return getAllocation().map(r => r.projectKey).filter(Boolean);
+  return [...new Set(getAllocation().map(r => r.projectKey).filter(Boolean))];
 }
 
 /*
@@ -280,6 +287,8 @@ started (ISO), hours, and month.
  */
 function getWorklogs() {
   const JIRA_URL = getUserProperties().getProperty('JIRA_BASE_URL');
+  const JIRA_API_KEY = getUserProperties().getProperty('JIRA_API_KEY');
+  if (!JIRA_URL || !JIRA_API_KEY) throw new Error('Jira URL and API key must be configured in the Config tab.');
   const authHeader = getAuthHeader_();
   const userEmail = Session.getActiveUser().getEmail();
   const currentYear = new Date().getFullYear();
@@ -293,7 +302,9 @@ function getWorklogs() {
   let nextPageToken = null;
   do {
     const endpoint = nextPageToken ? `${BASE_ENDPOINT}&nextPageToken=${nextPageToken}` : BASE_ENDPOINT;
-    const data = JSON.parse(UrlFetchApp.fetch(endpoint, fetchOpts).getContentText());
+    const response = UrlFetchApp.fetch(endpoint, fetchOpts);
+    if (response.getResponseCode() >= 400) throw new Error(`Jira API error (${response.getResponseCode()}): ${response.getContentText()}`);
+    const data = JSON.parse(response.getContentText());
     if (data.issues) allIssues = allIssues.concat(data.issues);
     nextPageToken = data.nextPageToken || null;
   } while (nextPageToken);
@@ -438,6 +449,10 @@ function getWorklogTotals_(issueKeys, authHeader, jiraUrl, userEmail) {
         const nextPending = [];
         responses.forEach((response, i) => {
             const { keyIndex, startAt } = pending[i];
+            if (response.getResponseCode() >= 400) {
+                Logger.log(`getWorklogTotals_: HTTP ${response.getResponseCode()} for ${issueKeys[keyIndex]} — skipping`);
+                return;
+            }
             const data = JSON.parse(response.getContentText());
             if (!data.worklogs) return;
             data.worklogs.forEach(log => {
@@ -453,11 +468,6 @@ function getWorklogTotals_(issueKeys, authHeader, jiraUrl, userEmail) {
         pending = nextPending;
     }
     return totals;
-}
-
-/** Returns the total seconds logged by userEmail on a single issue. */
-function getIssueWorklogTotal_(issueKey, authHeader, jiraUrl, userEmail) {
-    return getWorklogTotals_([issueKey], authHeader, jiraUrl, userEmail)[0];
 }
 
 /**

@@ -103,4 +103,4 @@ The following values are hardcoded in `Code.js` and reflect intentional business
 
 - All configuration (Jira URL, API key, allocation) is stored in Apps Script user properties scoped to your Google account — no data is shared with other users of the same deployment.
 - Worklog fetches use `UrlFetchApp.fetchAll()` to parallelize requests, significantly reducing load time when many issues are present.
-- The script timezone is set to `America/Denver` in `appsscript.json`. All times are converted to UTC before being posted to Jira.
+- The script timezone is set to `America/Chicago` in `appsscript.json`. All times are converted to UTC before being posted to Jira.

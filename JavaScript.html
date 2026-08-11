@@ -1,4 +1,8 @@
 <script>
+  function esc(str) {
+    return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
   document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -38,12 +42,13 @@
   function saveConfig() {
     const url = document.getElementById('cfg-jira-url').value.trim();
     const key = document.getElementById('cfg-api-key').value.trim();
-    setLoading('cfg-save-btn', true, 'Save');
     let pending = 0;
     function done() { if (--pending === 0) { setLoading('cfg-save-btn', false, 'Save'); showStatus('cfg-status', 'Saved!', 'success'); } }
-    if (url) { pending++; google.script.run.withSuccessHandler(done).saveJiraUrl(url); }
-    if (key) { pending++; google.script.run.withSuccessHandler(done).saveApiKey(key); }
-    if (!pending) showStatus('cfg-status', 'Nothing to save.', 'info');
+    function fail(e) { setLoading('cfg-save-btn', false, 'Save'); showStatus('cfg-status', 'Error: ' + e.message, 'error'); }
+    if (url) { pending++; google.script.run.withSuccessHandler(done).withFailureHandler(fail).saveJiraUrl(url); }
+    if (key) { pending++; google.script.run.withSuccessHandler(done).withFailureHandler(fail).saveApiKey(key); }
+    if (pending > 0) { setLoading('cfg-save-btn', true, 'Save'); }
+    else { showStatus('cfg-status', 'Nothing to save.', 'info'); }
   }
 
   function renderAllocationTable(rows) {
@@ -57,7 +62,7 @@
     const tr = document.createElement('tr');
     const fields = ['colorNum','projectKey','colorLabel','projectName','hoursPerWeek','colorEnumName'];
     const placeholders = ['1–11','CEOT','Orange','CFA Project','20','ORANGE'];
-    tr.innerHTML = fields.map((f,i) => `<td><input type="text" style="width:100%" name="${f}" value="${(data && data[f]) || ''}" placeholder="${placeholders[i]}"></td>`).join('') +
+    tr.innerHTML = fields.map((f,i) => `<td><input type="text" style="width:100%" name="${f}" value="${esc((data && data[f]) || '')}" placeholder="${placeholders[i]}"></td>`).join('') +
       `<td><button class="btn" style="padding:4px 8px;" onclick="this.closest('tr').remove()">✕</button></td>`;
     tbody.appendChild(tr);
   }
@@ -91,7 +96,7 @@
     monday.setDate(today.getDate() - (day === 0 ? 6 : day - 1));
     const friday = new Date(monday);
     friday.setDate(monday.getDate() + 4);
-    const fmt = d => d.toISOString().slice(0, 10);
+    const fmt = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
     document.addEventListener('DOMContentLoaded', () => {
       document.getElementById('tc-start-date').value = fmt(monday);
       document.getElementById('tc-end-date').value = fmt(friday);
@@ -109,7 +114,10 @@
     showStatus('tc-status', 'Importing calendar events…', 'info');
 
     // Load issues for dropdown in parallel
-    google.script.run.withSuccessHandler(issues => { window.issueOptions = issues; }).getJiraIssues();
+    google.script.run
+      .withSuccessHandler(issues => { window.issueOptions = issues; })
+      .withFailureHandler(e => showStatus('tc-status', 'Could not load issues for dropdowns: ' + e.message, 'error'))
+      .getJiraIssues();
 
     google.script.run
       .withSuccessHandler(events => {
@@ -131,17 +139,17 @@
     events.forEach((ev, idx) => {
       const tr = document.createElement('tr');
       tr.innerHTML = `
-        <td>${ev.date}</td>
-        <td title="${ev.description}">${ev.title}</td>
-        <td>${ev.start}</td>
-        <td>${ev.end}</td>
-        <td>${ev.projectKey}</td>
+        <td>${esc(ev.date)}</td>
+        <td title="${esc(ev.description)}">${esc(ev.title)}</td>
+        <td>${esc(ev.start)}</td>
+        <td>${esc(ev.end)}</td>
+        <td>${esc(ev.projectKey)}</td>
         <td>
           <select data-idx="${idx}" class="tc-issue-select" style="min-width:200px;">
             <option value="">— select —</option>
           </select>
         </td>
-        <td>${ev.duration}</td>`;
+        <td>${esc(ev.duration)}</td>`;
       tbody.appendChild(tr);
     });
     document.getElementById('tc-table').style.display = '';
@@ -169,13 +177,14 @@
     const entries = Array.from(document.querySelectorAll('.tc-issue-select')).map(sel => {
       const ev = window.timecardEvents[parseInt(sel.dataset.idx)];
       return { date: ev.date, issueKey: sel.value, startTime: ev.start, durationHours: ev.duration };
-    }).filter(e => e.issueKey);
+    }).filter(e => e.issueKey && e.durationHours > 0);
 
     if (!entries.length) { showStatus('tc-submit-status', 'No issues selected.', 'info'); return; }
     setLoading('tc-submit-btn', true, '📥 Send to Jira');
     google.script.run
       .withSuccessHandler(result => {
         setLoading('tc-submit-btn', false, '📥 Send to Jira');
+        document.querySelectorAll('.tc-issue-select').forEach(s => s.value = '');
         const msg = `Sent ${result.succeeded} worklog(s).` + (result.failed ? ` ${result.failed} failed: ${result.errors.join(', ')}` : '');
         showStatus('tc-submit-status', msg, result.failed ? 'error' : 'success');
       })
@@ -213,11 +222,11 @@
     issues.forEach((issue, idx) => {
       const tr = document.createElement('tr');
       tr.innerHTML = `
-        <td><a href="${issue.link}" target="_blank">${issue.key}</a></td>
-        <td>${issue.name}</td>
-        <td>${issue.project}</td>
-        <td>${issue.status}</td>
-        <td>${issue.timeLogged}</td>
+        <td><a href="${esc(issue.link)}" target="_blank">${esc(issue.key)}</a></td>
+        <td>${esc(issue.name)}</td>
+        <td>${esc(issue.project)}</td>
+        <td>${esc(issue.status)}</td>
+        <td>${esc(issue.timeLogged)}</td>
         <td><input type="number" min="0" step="0.25" style="width:80px;" data-idx="${idx}" class="schedule-input" placeholder="0"></td>`;
       tbody.appendChild(tr);
     });
@@ -244,16 +253,16 @@
       showStatus('schedule-status', 'Enter hours in the Schedule column first.', 'info');
       return;
     }
-    setLoading('schedule-toolbar', true, '⏱ Schedule Calendar Events');
+    setLoading('schedule-btn', true, '⏱ Schedule Calendar Events');
     showStatus('schedule-status', 'Creating calendar events…', 'info');
     google.script.run
       .withSuccessHandler(result => {
-        setLoading('schedule-toolbar', false, '⏱ Schedule Calendar Events');
+        setLoading('schedule-btn', false, '⏱ Schedule Calendar Events');
         showStatus('schedule-status', `Created ${result.created} event(s) starting at ${result.startTime}.`, 'success');
         document.querySelectorAll('.schedule-input').forEach(i => i.value = '');
       })
       .withFailureHandler(e => {
-        setLoading('schedule-toolbar', false, '⏱ Schedule Calendar Events');
+        setLoading('schedule-btn', false, '⏱ Schedule Calendar Events');
         showStatus('schedule-status', 'Error: ' + e.message, 'error');
       })
       .scheduleCalendarEvents(toSchedule);
@@ -299,7 +308,7 @@
         setLoading('wl-load-btn', false, 'Pull Worklog');
         const tbody = document.getElementById('wl-body');
         tbody.innerHTML = rows.map(r =>
-          `<tr><td>${r.month}</td><td>${r.projectKey}</td><td>${r.issueKey}</td><td>${r.summary}</td><td>${r.timeSpent}</td><td>${r.hours.toFixed(2)}</td><td>${r.started.slice(0,10)}</td></tr>`
+          `<tr><td>${esc(r.month)}</td><td>${esc(r.projectKey)}</td><td>${esc(r.issueKey)}</td><td>${esc(r.summary)}</td><td>${esc(r.timeSpent)}</td><td>${esc(r.hours.toFixed(2))}</td><td>${esc(r.started.slice(0,10))}</td></tr>`
         ).join('');
         document.getElementById('wl-table').style.display = '';
         document.getElementById('wl-count').textContent = `${rows.length} entries`;
