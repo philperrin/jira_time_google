@@ -128,9 +128,12 @@
       const idx = parseInt(input.dataset.idx);
       const hours = parseFloat(input.value) || 0;
       if (hours > 0 && idx >= 0 && idx < window.loadedIssues.length) {
+        const issue = window.loadedIssues[idx];
         toSchedule.push({
-          ...window.loadedIssues[idx],
-          scheduleHours: hours
+          key: issue.key,
+          jiraProject: issue.projectKey,
+          dropdownValue: issue.dropdownValue,
+          hours: hours
         });
       }
     });
