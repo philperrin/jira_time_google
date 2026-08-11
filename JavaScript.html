@@ -83,6 +83,109 @@
   // Load config when tab is clicked
   document.querySelector('[data-tab="config"]').addEventListener('click', loadConfig);
 
+  // ── Timecard Tab ─────────────────────────────────────────────
+  (function initTimecardDates() {
+    const today = new Date();
+    const day = today.getDay();
+    const monday = new Date(today);
+    monday.setDate(today.getDate() - (day === 0 ? 6 : day - 1));
+    const friday = new Date(monday);
+    friday.setDate(monday.getDate() + 4);
+    const fmt = d => d.toISOString().slice(0, 10);
+    document.addEventListener('DOMContentLoaded', () => {
+      document.getElementById('tc-start-date').value = fmt(monday);
+      document.getElementById('tc-end-date').value = fmt(friday);
+    });
+  })();
+
+  window.timecardEvents = [];
+  window.issueOptions = [];
+
+  function loadTimecardEvents() {
+    const start = document.getElementById('tc-start-date').value;
+    const end = document.getElementById('tc-end-date').value;
+    if (!start || !end) { showStatus('tc-status', 'Select a date range.', 'info'); return; }
+    setLoading('tc-load-btn', true, 'Import Events');
+    showStatus('tc-status', 'Importing calendar events…', 'info');
+
+    // Load issues for dropdown in parallel
+    google.script.run.withSuccessHandler(issues => { window.issueOptions = issues; }).getJiraIssues();
+
+    google.script.run
+      .withSuccessHandler(events => {
+        window.timecardEvents = events;
+        renderTimecardTable(events);
+        setLoading('tc-load-btn', false, 'Import Events');
+        showStatus('tc-status', `${events.length} event(s) imported.`, 'success');
+      })
+      .withFailureHandler(e => {
+        setLoading('tc-load-btn', false, 'Import Events');
+        showStatus('tc-status', 'Error: ' + e.message, 'error');
+      })
+      .importCalendarEvents(start, end);
+  }
+
+  function renderTimecardTable(events) {
+    const tbody = document.getElementById('tc-body');
+    tbody.innerHTML = '';
+    events.forEach((ev, idx) => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${ev.date}</td>
+        <td title="${ev.description}">${ev.title}</td>
+        <td>${ev.start}</td>
+        <td>${ev.end}</td>
+        <td>${ev.projectKey}</td>
+        <td>
+          <select data-idx="${idx}" class="tc-issue-select" style="min-width:200px;">
+            <option value="">— select —</option>
+          </select>
+        </td>
+        <td>${ev.duration}</td>`;
+      tbody.appendChild(tr);
+    });
+    document.getElementById('tc-table').style.display = '';
+    document.getElementById('tc-submit-toolbar').style.display = '';
+
+    // Populate dropdowns once issues are loaded (poll briefly)
+    let attempts = 0;
+    const populate = setInterval(() => {
+      if (window.issueOptions.length || ++attempts > 20) {
+        clearInterval(populate);
+        document.querySelectorAll('.tc-issue-select').forEach(sel => {
+          const ev = window.timecardEvents[parseInt(sel.dataset.idx)];
+          window.issueOptions.forEach(issue => {
+            const opt = document.createElement('option');
+            opt.value = issue.key;
+            opt.textContent = issue.dropdownValue;
+            if (issue.projectKey === ev.projectKey) sel.appendChild(opt);
+          });
+        });
+      }
+    }, 300);
+  }
+
+  function submitTimecard() {
+    const entries = Array.from(document.querySelectorAll('.tc-issue-select')).map(sel => {
+      const ev = window.timecardEvents[parseInt(sel.dataset.idx)];
+      return { date: ev.date, issueKey: sel.value, startTime: ev.start, durationHours: ev.duration };
+    }).filter(e => e.issueKey);
+
+    if (!entries.length) { showStatus('tc-submit-status', 'No issues selected.', 'info'); return; }
+    setLoading('tc-submit-btn', true, '📥 Send to Jira');
+    google.script.run
+      .withSuccessHandler(result => {
+        setLoading('tc-submit-btn', false, '📥 Send to Jira');
+        const msg = `Sent ${result.succeeded} worklog(s).` + (result.failed ? ` ${result.failed} failed: ${result.errors.join(', ')}` : '');
+        showStatus('tc-submit-status', msg, result.failed ? 'error' : 'success');
+      })
+      .withFailureHandler(e => {
+        setLoading('tc-submit-btn', false, '📥 Send to Jira');
+        showStatus('tc-submit-status', 'Error: ' + e.message, 'error');
+      })
+      .sendTimeEntries(entries);
+  }
+
   // ── Assignments Tab ──────────────────────────────────────────
   window.loadedIssues = [];
 
