@@ -352,6 +352,48 @@
   }
 
   // ── Worklog Tab ──────────────────────────────────────────────
+  function buildPivot(rows) {
+    const year = new Date().getFullYear();
+    const MONTHS = ['January','February','March','April','May','June',
+                    'July','August','September','October','November','December'];
+
+    const projects = [...new Set(rows.map(r => r.projectKey))].sort();
+    const data = {};
+    rows.forEach(r => {
+      if (!data[r.month]) data[r.month] = {};
+      data[r.month][r.projectKey] = (data[r.month][r.projectKey] || 0) + r.hours;
+    });
+
+    const head = document.getElementById('wl-pivot-head');
+    const body = document.getElementById('wl-pivot-body');
+    const foot = document.getElementById('wl-pivot-foot');
+
+    head.innerHTML = '<tr><th>Month</th>' +
+      projects.map(p => `<th>${esc(p)}</th>`).join('') +
+      '<th class="pivot-total">Total</th></tr>';
+
+    const colTotals = new Array(projects.length).fill(0);
+    body.innerHTML = MONTHS.map((name, mi) => {
+      const key = `${year}-${String(mi + 1).padStart(2, '0')}`;
+      const rowData = data[key] || {};
+      let rowTotal = 0;
+      const cells = projects.map((p, pi) => {
+        const v = rowData[p] || 0;
+        colTotals[pi] += v;
+        rowTotal += v;
+        return `<td>${v.toFixed(2)}</td>`;
+      });
+      return `<tr><td>${name}</td>${cells.join('')}<td class="pivot-total">${rowTotal.toFixed(2)}</td></tr>`;
+    }).join('');
+
+    const grandTotal = colTotals.reduce((s, v) => s + v, 0);
+    foot.innerHTML = '<tr class="pivot-total"><td>Total</td>' +
+      colTotals.map(v => `<td>${v.toFixed(2)}</td>`).join('') +
+      `<td class="pivot-total">${grandTotal.toFixed(2)}</td></tr>`;
+
+    document.getElementById('wl-summary').style.display = '';
+  }
+
   function loadWorklog() {
     setLoading('wl-load-btn', true, 'Pull Worklog');
     showStatus('wl-status', 'Fetching worklogs for this year…', 'info');
@@ -362,6 +404,7 @@
         tbody.innerHTML = rows.map(r =>
           `<tr><td>${esc(r.month)}</td><td>${esc(r.projectKey)}</td><td>${esc(r.issueKey)}</td><td>${esc(r.summary)}</td><td>${esc(r.timeSpent)}</td><td>${esc(r.hours.toFixed(2))}</td><td>${esc(r.started.slice(0,10))}</td></tr>`
         ).join('');
+        buildPivot(rows);
         document.getElementById('wl-table').style.display = '';
         document.getElementById('wl-count').textContent = `${rows.length} entries`;
         showStatus('wl-status', '', '');
