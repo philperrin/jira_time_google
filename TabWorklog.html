@@ -1,5 +1,6 @@
 <div class="toolbar">
   <button class="btn btn-primary" id="wl-load-btn" onclick="loadWorklog()">Pull Worklog</button>
+  <button class="btn btn-secondary" id="wl-export-btn" style="display:none;" onclick="exportWorklogCsv()">Export CSV</button>
   <span id="wl-count" style="color:#5f6368;font-size:13px;"></span>
 </div>
 <div id="wl-status" class="status-msg"></div>
@@ -12,12 +13,3 @@
     <tfoot id="wl-pivot-foot"></tfoot>
   </table>
 </div>
-
-<table id="wl-table" style="display:none;margin-top:16px;">
-  <thead>
-    <tr>
-      <th>Month</th><th>Project</th><th>Issue</th><th>Summary</th><th>Time Spent</th><th>Hours</th><th>Started</th>
-    </tr>
-  </thead>
-  <tbody id="wl-body"></tbody>
-</table>

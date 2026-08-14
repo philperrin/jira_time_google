@@ -159,6 +159,7 @@
 
   window.timecardEvents = [];
   window.issueOptions = [];
+  window.worklogRows = [];
 
   function loadTimecardEvents() {
     const start = document.getElementById('tc-start-date').value;
@@ -243,6 +244,12 @@
 
       table.appendChild(tbody);
       container.appendChild(table);
+
+      const dayTotal = document.createElement('div');
+      dayTotal.className = 'tc-day-total';
+      dayTotal.dataset.date = date;
+      dayTotal.textContent = 'Day total: — (0 of ' + dayEvents.length + ' events assigned)';
+      container.appendChild(dayTotal);
     });
 
     // Build summary table headers (static — built once)
@@ -313,6 +320,19 @@
       '<tr class="pivot-total"><td>Total</td>' +
       dates.map(d => `<td>${colTotals[d] > 0 ? colTotals[d].toFixed(2) : '—'}</td>`).join('') +
       `<td class="pivot-total">${grandTotal > 0 ? grandTotal.toFixed(2) : '—'}</td></tr>`;
+
+    dates.forEach(date => {
+      const dayEvents = events.filter(e => e.date === date);
+      let dayTotal = 0, assignedCount = 0;
+      dayEvents.forEach(e => {
+        const idx = events.indexOf(e);
+        const sel = document.querySelector('.tc-issue-select[data-idx="' + idx + '"]');
+        if (sel && sel.value) { dayTotal += e.duration || 0; assignedCount++; }
+      });
+      const el = document.querySelector('.tc-day-total[data-date="' + date + '"]');
+      if (el) el.textContent = 'Day total: ' + (dayTotal > 0 ? dayTotal.toFixed(2) + ' h' : '—') +
+        ' (' + assignedCount + ' of ' + dayEvents.length + ' events assigned)';
+    });
   }
 
   function submitTimecard() {
@@ -343,22 +363,44 @@
   function loadAssignments() {
     setLoading('assignments-load-btn', true, 'Load Assignments');
     showStatus('assignments-status', 'Fetching from Jira…', 'info');
+    let issues = null, allocationRows = null;
+    function tryRender() {
+      if (issues === null || allocationRows === null) return;
+      window.loadedIssues = issues;
+      const nameMap = Object.fromEntries(
+        allocationRows.filter(r => r.projectKey && r.projectName).map(r => [r.projectKey, r.projectName])
+      );
+      renderAssignments(issues, nameMap);
+      setLoading('assignments-load-btn', false, 'Load Assignments');
+      document.getElementById('assignments-count').textContent = `${issues.length} issues`;
+      showStatus('assignments-status', '', '');
+    }
     google.script.run
-      .withSuccessHandler(issues => {
-        window.loadedIssues = issues;
-        renderAssignments(issues);
-        setLoading('assignments-load-btn', false, 'Load Assignments');
-        document.getElementById('assignments-count').textContent = `${issues.length} issues`;
-        showStatus('assignments-status', '', '');
-      })
+      .withSuccessHandler(r => { issues = r; tryRender(); })
       .withFailureHandler(e => {
         setLoading('assignments-load-btn', false, 'Load Assignments');
         showStatus('assignments-status', 'Error: ' + e.message, 'error');
       })
       .getJiraIssues();
+    google.script.run
+      .withSuccessHandler(r => { allocationRows = r; tryRender(); })
+      .getAllocation();
   }
 
-  function renderAssignments(issues) {
+  function toggleGroup(headingEl) {
+    const group = headingEl.closest('.project-group');
+    if (!group) return;
+    const toggle = headingEl.querySelector('.group-toggle');
+    if (group.classList.contains('collapsed')) {
+      group.classList.remove('collapsed');
+      if (toggle) toggle.textContent = '▼';
+    } else {
+      group.classList.add('collapsed');
+      if (toggle) toggle.textContent = '▶';
+    }
+  }
+
+  function renderAssignments(issues, nameMap) {
     const container = document.getElementById('assignments-container');
     container.innerHTML = '';
 
@@ -366,18 +408,40 @@
     const groupMap = {};
     issues.forEach((issue, idx) => {
       const key = issue.projectKey || 'Unknown';
-      if (!groupMap[key]) {
-        groupMap[key] = [];
-        groups.push(key);
-      }
+      if (!groupMap[key]) { groupMap[key] = []; groups.push(key); }
       groupMap[key].push({ issue, idx });
     });
 
+    const STATUS_ORDER = ['To Do', 'In Progress', 'Done', 'TIME TRACKING ONLY'];
+
     groups.forEach(projectKey => {
+      const displayName = (nameMap && nameMap[projectKey]) || projectKey;
+      const groupItems = groupMap[projectKey];
+
+      const statusCounts = {};
+      groupItems.forEach(({ issue }) => {
+        statusCounts[issue.status] = (statusCounts[issue.status] || 0) + 1;
+      });
+      const orderedStatuses = [
+        ...STATUS_ORDER.filter(s => statusCounts[s]),
+        ...Object.keys(statusCounts).filter(s => !STATUS_ORDER.includes(s)).sort()
+      ];
+      const summaryText = orderedStatuses.map(s => s + ': ' + statusCounts[s]).join('\n');
+
+      const groupDiv = document.createElement('div');
+      groupDiv.className = 'project-group';
+
       const heading = document.createElement('h3');
       heading.className = 'project-heading';
-      heading.textContent = projectKey;
-      container.appendChild(heading);
+      heading.onclick = function() { toggleGroup(this); };
+      heading.innerHTML = '<span class="group-toggle">▼</span><span class="group-label">' + esc(displayName) + '</span>';
+
+      const body = document.createElement('div');
+      body.className = 'project-group-body';
+
+      const summary = document.createElement('p');
+      summary.className = 'project-status-summary';
+      summary.textContent = summaryText;
 
       const table = document.createElement('table');
       table.style.tableLayout = 'fixed';
@@ -389,7 +453,7 @@
       <th style="width:20%">Schedule</th>
       </tr></thead>`;
       const tbody = document.createElement('tbody');
-      groupMap[projectKey].forEach(({ issue, idx }) => {
+      groupItems.forEach(({ issue, idx }) => {
         const tr = document.createElement('tr');
         tr.innerHTML = `
           <td><a href="${esc(issue.link)}" target="_blank">${esc(issue.key)}</a></td>
@@ -400,7 +464,12 @@
         tbody.appendChild(tr);
       });
       table.appendChild(tbody);
-      container.appendChild(table);
+
+      body.appendChild(summary);
+      body.appendChild(table);
+      groupDiv.appendChild(heading);
+      groupDiv.appendChild(body);
+      container.appendChild(groupDiv);
     });
 
     container.style.display = '';
@@ -522,12 +591,9 @@
     google.script.run
       .withSuccessHandler(rows => {
         setLoading('wl-load-btn', false, 'Pull Worklog');
-        const tbody = document.getElementById('wl-body');
-        tbody.innerHTML = rows.map(r =>
-          `<tr><td>${esc(r.month)}</td><td>${esc(r.projectKey)}</td><td>${esc(r.issueKey)}</td><td>${esc(r.summary)}</td><td>${esc(r.timeSpent)}</td><td>${esc(r.hours.toFixed(2))}</td><td>${esc(r.started.slice(0,10))}</td></tr>`
-        ).join('');
+        window.worklogRows = rows;
         buildPivot(rows);
-        document.getElementById('wl-table').style.display = '';
+        document.getElementById('wl-export-btn').style.display = '';
         document.getElementById('wl-count').textContent = `${rows.length} entries`;
         showStatus('wl-status', '', '');
       })
@@ -536,5 +602,24 @@
         showStatus('wl-status', 'Error: ' + e.message, 'error');
       })
       .getWorklogs();
+  }
+
+  function exportWorklogCsv() {
+    const rows = window.worklogRows || [];
+    if (!rows.length) return;
+    const headers = ['Month', 'Project', 'Issue', 'Summary', 'Time Spent', 'Hours', 'Started'];
+    const csvEsc = v => '"' + String(v || '').replace(/"/g, '""') + '"';
+    const lines = [headers.map(csvEsc).join(',')].concat(
+      rows.map(r => [r.month, r.projectKey, r.issueKey, r.summary, r.timeSpent, r.hours.toFixed(2), r.started.slice(0, 10)].map(csvEsc).join(','))
+    );
+    const blob = new Blob([lines.join('\r\n')], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'jira-worklog-' + new Date().getFullYear() + '.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   }
 </script>
