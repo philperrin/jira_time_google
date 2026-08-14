@@ -163,28 +163,68 @@
   }
 
   function renderTimecardTable(events) {
-    const tbody = document.getElementById('tc-body');
-    tbody.innerHTML = '';
-    events.forEach((ev, idx) => {
-      const tr = document.createElement('tr');
-      tr.innerHTML = `
-        <td>${esc(ev.date)}</td>
-        <td title="${esc(ev.description)}">${esc(ev.title)}</td>
-        <td>${esc(ev.start)}</td>
-        <td>${esc(ev.end)}</td>
-        <td>${esc(ev.projectKey)}</td>
-        <td>
-          <select data-idx="${idx}" class="tc-issue-select" style="min-width:200px;">
-            <option value="">— select —</option>
-          </select>
-        </td>
-        <td>${esc(ev.duration)}</td>`;
-      tbody.appendChild(tr);
+    const container = document.getElementById('tc-days-container');
+    container.innerHTML = '';
+
+    const dates = [...new Set(events.map(e => e.date))].sort();
+
+    const fmtFull = dateStr => new Date(dateStr + 'T00:00:00').toLocaleDateString('en-US', {
+      weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
     });
-    document.getElementById('tc-table').style.display = '';
+    const fmtShort = dateStr => new Date(dateStr + 'T00:00:00').toLocaleDateString('en-US', {
+      month: 'short', day: 'numeric'
+    });
+
+    dates.forEach(date => {
+      const dayEvents = events.filter(e => e.date === date);
+
+      const heading = document.createElement('h3');
+      heading.className = 'project-heading';
+      heading.textContent = fmtFull(date);
+      container.appendChild(heading);
+
+      const table = document.createElement('table');
+      table.innerHTML = `<thead><tr>
+        <th>Event</th><th>Description</th><th>Start</th><th>End</th><th>Project</th><th>Jira Issue</th><th>Duration (h)</th>
+      </tr></thead>`;
+      const tbody = document.createElement('tbody');
+
+      dayEvents.forEach(ev => {
+        const idx = events.indexOf(ev);
+        const desc = ev.description || '';
+        const truncated = desc.length > 150 ? desc.slice(0, 150) + '…' : desc;
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td title="${esc(ev.description)}">${esc(ev.title)}</td>
+          <td>${esc(truncated)}</td>
+          <td>${esc(ev.start)}</td>
+          <td>${esc(ev.end)}</td>
+          <td>${esc(ev.projectKey)}</td>
+          <td>
+            <select data-idx="${idx}" class="tc-issue-select" style="min-width:200px;">
+              <option value="">— select —</option>
+            </select>
+          </td>
+          <td>${esc(String(ev.duration))}</td>`;
+        tbody.appendChild(tr);
+      });
+
+      table.appendChild(tbody);
+      container.appendChild(table);
+    });
+
+    // Build summary table headers (static — built once)
+    const shortHeaders = dates.map(fmtShort);
+    document.getElementById('tc-summary-head').innerHTML =
+      '<tr><th>Project</th>' +
+      shortHeaders.map(h => `<th>${esc(h)}</th>`).join('') +
+      '<th class="pivot-total">Total</th></tr>';
+
+    container.style.display = '';
+    document.getElementById('tc-summary').style.display = '';
     document.getElementById('tc-submit-toolbar').style.display = '';
 
-    // Populate dropdowns once issues are loaded (poll briefly)
+    // Populate issue dropdowns once issues are loaded (poll briefly)
     let attempts = 0;
     const populate = setInterval(() => {
       if (window.issueOptions.length || ++attempts > 20) {
@@ -197,9 +237,50 @@
             opt.textContent = issue.dropdownValue;
             if (issue.projectKey === ev.projectKey) sel.appendChild(opt);
           });
+          sel.addEventListener('change', updateSummaryTable);
         });
+        updateSummaryTable();
       }
     }, 300);
+  }
+
+  function updateSummaryTable() {
+    const events = window.timecardEvents;
+    if (!events || !events.length) return;
+
+    const dates = [...new Set(events.map(e => e.date))].sort();
+    const projects = [...new Set(events.map(e => e.projectKey))].sort();
+
+    // Build a map: { projectKey: { date: totalHours } }
+    const sums = {};
+    projects.forEach(p => { sums[p] = {}; dates.forEach(d => { sums[p][d] = 0; }); });
+
+    document.querySelectorAll('.tc-issue-select').forEach(sel => {
+      if (!sel.value) return;
+      const ev = events[parseInt(sel.dataset.idx)];
+      if (!ev) return;
+      sums[ev.projectKey][ev.date] = (sums[ev.projectKey][ev.date] || 0) + (ev.duration || 0);
+    });
+
+    const colTotals = {};
+    dates.forEach(d => { colTotals[d] = 0; });
+
+    document.getElementById('tc-summary-body').innerHTML = projects.map(p => {
+      let rowTotal = 0;
+      const cells = dates.map(d => {
+        const v = sums[p][d] || 0;
+        colTotals[d] += v;
+        rowTotal += v;
+        return `<td>${v > 0 ? v.toFixed(2) : '—'}</td>`;
+      });
+      return `<tr><td>${esc(p)}</td>${cells.join('')}<td class="pivot-total">${rowTotal > 0 ? rowTotal.toFixed(2) : '—'}</td></tr>`;
+    }).join('');
+
+    const grandTotal = dates.reduce((s, d) => s + colTotals[d], 0);
+    document.getElementById('tc-summary-foot').innerHTML =
+      '<tr class="pivot-total"><td>Total</td>' +
+      dates.map(d => `<td>${colTotals[d] > 0 ? colTotals[d].toFixed(2) : '—'}</td>`).join('') +
+      `<td class="pivot-total">${grandTotal > 0 ? grandTotal.toFixed(2) : '—'}</td></tr>`;
   }
 
   function submitTimecard() {
