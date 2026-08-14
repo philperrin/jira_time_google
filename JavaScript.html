@@ -380,8 +380,13 @@
       container.appendChild(heading);
 
       const table = document.createElement('table');
+      table.style.tableLayout = 'fixed';
       table.innerHTML = `<thead><tr>
-        <th>Key</th><th>Name</th><th>Status</th><th>Time Logged (h)</th><th>Schedule (h)</th>
+      <th style="width:15%">Key</th>
+      <th style="width:30%">Name</th>
+      <th style="width:15%">Status</th>
+      <th style="width:20%">Time Logged</th>
+      <th style="width:20%">Schedule</th>
       </tr></thead>`;
       const tbody = document.createElement('tbody');
       groupMap[projectKey].forEach(({ issue, idx }) => {
