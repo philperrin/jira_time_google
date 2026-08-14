@@ -412,7 +412,7 @@
       groupMap[key].push({ issue, idx });
     });
 
-    const STATUS_ORDER = ['To Do', 'In Progress', 'Done', 'TIME TRACKING ONLY'];
+    const STATUS_ORDER = ['Backlog','To Do', 'In Progress', 'In Review', 'Done', 'TIME TRACKING ONLY'];
 
     groups.forEach(projectKey => {
       const displayName = (nameMap && nameMap[projectKey]) || projectKey;
