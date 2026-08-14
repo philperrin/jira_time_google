@@ -89,23 +89,48 @@
   function addAllocationRow(data) {
     const tbody = document.getElementById('allocation-body');
     const tr = document.createElement('tr');
-    const fields = ['colorNum','projectKey','colorLabel','projectName','hoursPerWeek','colorEnumName'];
-    const placeholders = ['1–11','CEOT','Orange','CFA Project','20','ORANGE'];
-    tr.innerHTML = fields.map((f,i) => `<td><input type="text" style="width:100%" name="${f}" value="${esc((data && data[f]) || '')}" placeholder="${placeholders[i]}"></td>`).join('') +
-      `<td><button class="btn" style="padding:4px 8px;" onclick="this.closest('tr').remove()">✕</button></td>`;
+
+    const COLOR_OPTIONS = [
+      ['#828bc2', 'Lavender (#828bc2)'],
+      ['#55b080', 'Sage (#55b080)'],
+      ['#a75aba', 'Grape (#a75aba)'],
+      ['#d6837a', 'Flamingo (#d6837a)'],
+      ['#e7ba51', 'Banana (#e7ba51)'],
+      ['#e3683e', 'Tangerine (#e3683e)'],
+      ['#4b99d2', 'Peacock (#4b99d2)'],
+      ['#7c7c7c', 'Graphite (#7c7c7c)'],
+      ['#6e72c3', 'Blueberry (#6e72c3)'],
+      ['#489160', 'Basil (#489160)'],
+      ['#da5234', 'Tomato (#da5234)'],
+    ];
+
+    const selectedHex = (data && data.colorHex) || '';
+    const optionsHtml = COLOR_OPTIONS.map(([val, label]) =>
+      '<option value="' + val + '"' + (val === selectedHex ? ' selected' : '') + '>' + label + '</option>'
+    ).join('');
+
+    const ignored = data && data.ignore ? 'checked' : '';
+
+    tr.innerHTML =
+      '<td><select name="colorHex" style="width:100%">' + optionsHtml + '</select></td>' +
+      '<td><input type="text" style="width:100%" name="projectKey" value="' + esc((data && data.projectKey) || '') + '" placeholder="CEOT"></td>' +
+      '<td><input type="text" style="width:100%" name="projectName" value="' + esc((data && data.projectName) || '') + '" placeholder="CFA Project"></td>' +
+      '<td><input type="text" style="width:100%" name="hoursPerWeek" value="' + esc(String((data && data.hoursPerWeek) || '')) + '" placeholder="20"></td>' +
+      '<td style="text-align:center"><input type="checkbox" name="ignore" ' + ignored + '></td>' +
+      '<td><button class="btn" style="padding:4px 8px;" onclick="this.closest(\'tr\').remove()">✕</button></td>';
+
     tbody.appendChild(tr);
   }
 
   function saveAllocationTable() {
     const rows = Array.from(document.querySelectorAll('#allocation-body tr')).map(tr => {
-      const inputs = tr.querySelectorAll('input');
+      const cells = tr.querySelectorAll('td');
       return {
-        colorNum: inputs[0].value.trim(),
-        projectKey: inputs[1].value.trim(),
-        colorLabel: inputs[2].value.trim(),
-        projectName: inputs[3].value.trim(),
-        hoursPerWeek: parseFloat(inputs[4].value) || 0,
-        colorEnumName: inputs[5].value.trim().toUpperCase()
+        colorHex: cells[0].querySelector('select').value,
+        projectKey: cells[1].querySelector('input').value.trim(),
+        projectName: cells[2].querySelector('input').value.trim(),
+        hoursPerWeek: parseFloat(cells[3].querySelector('input').value) || 0,
+        ignore: cells[4].querySelector('input').checked
       };
     }).filter(r => r.projectKey);
     google.script.run
@@ -183,10 +208,17 @@
       heading.textContent = fmtFull(date);
       container.appendChild(heading);
 
-      const table = document.createElement('table');
-      table.innerHTML = `<thead><tr>
-        <th>Event</th><th>Description</th><th>Start</th><th>End</th><th>Project</th><th>Jira Issue</th><th>Duration (h)</th>
-      </tr></thead>`;
+          const table = document.createElement('table');
+    table.style.tableLayout = 'fixed';
+    table.innerHTML = `<thead><tr>
+      <th style="width:14%">Event</th>
+      <th style="width:26%">Description</th>
+      <th style="width:8%">Start</th>
+      <th style="width:8%">End</th>
+      <th style="width:8%">Project</th>
+      <th style="width:22%">Jira Issue</th>
+      <th style="width:7%">Duration (h)</th>
+    </tr></thead>`;
       const tbody = document.createElement('tbody');
 
       dayEvents.forEach(ev => {

@@ -113,25 +113,24 @@ function scheduleCalendarEvents(toSchedule) {
   const JIRA_URL = getUserProperties().getProperty('JIRA_BASE_URL');
   const allocation = getAllocation();
 
-  const COLOR_ENUM_MAP = {
-    'PALE_BLUE': CalendarApp.EventColor.PALE_BLUE,
-    'PALE_GREEN': CalendarApp.EventColor.PALE_GREEN,
-    'MAUVE': CalendarApp.EventColor.MAUVE,
-    'PALE_RED': CalendarApp.EventColor.PALE_RED,
-    'YELLOW': CalendarApp.EventColor.YELLOW,
-    'ORANGE': CalendarApp.EventColor.ORANGE,
-    'CYAN': CalendarApp.EventColor.CYAN,
-    'GRAY': CalendarApp.EventColor.GRAY,
-    'GREY': CalendarApp.EventColor.GRAY,
-    'BLUE': CalendarApp.EventColor.BLUE,
-    'GREEN': CalendarApp.EventColor.GREEN,
-    'RED': CalendarApp.EventColor.RED
+  const HEX_TO_EVENT_COLOR = {
+    '#828bc2': CalendarApp.EventColor.PALE_BLUE,
+    '#55b080': CalendarApp.EventColor.PALE_GREEN,
+    '#a75aba': CalendarApp.EventColor.MAUVE,
+    '#d6837a': CalendarApp.EventColor.PALE_RED,
+    '#e7ba51': CalendarApp.EventColor.YELLOW,
+    '#e3683e': CalendarApp.EventColor.ORANGE,
+    '#4b99d2': CalendarApp.EventColor.CYAN,
+    '#7c7c7c': CalendarApp.EventColor.GRAY,
+    '#6e72c3': CalendarApp.EventColor.BLUE,
+    '#489160': CalendarApp.EventColor.GREEN,
+    '#da5234': CalendarApp.EventColor.RED
   };
 
   const projectColorMap = Object.fromEntries(
     allocation
-      .filter(r => r.projectKey)
-      .map(r => [r.projectKey, COLOR_ENUM_MAP[r.colorEnumName] || null])
+      .filter(r => r.projectKey && r.colorHex)
+      .map(r => [r.projectKey, HEX_TO_EVENT_COLOR[r.colorHex] || null])
   );
 
   const now = new Date();
@@ -169,12 +168,16 @@ function importCalendarEvents(startDateStr, endDateStr) {
   const JIRA_API_KEY = getUserProperties().getProperty('JIRA_API_KEY');
   if (!JIRA_URL || !JIRA_API_KEY) throw new Error('Jira URL and API key must be configured in the Config tab.');
   const allocation = getAllocation();
+  const HEX_TO_COLOR_ID = {
+    '#828bc2': '1', '#55b080': '2', '#a75aba': '3', '#d6837a': '4',
+    '#e7ba51': '5', '#e3683e': '6', '#4b99d2': '7', '#7c7c7c': '8',
+    '#6e72c3': '9', '#489160': '10', '#da5234': '11'
+  };
+  const activeRows = allocation.filter(r => r.projectKey && r.colorHex && !r.ignore);
   const colorMap = Object.fromEntries(
-    allocation.filter(r => r.projectKey && r.colorLabel).map(r => [r.colorNum, r.projectKey])
+    activeRows.map(r => [HEX_TO_COLOR_ID[r.colorHex], r.projectKey])
   );
-  const validProjectKeys = new Set(
-    allocation.filter(r => r.projectKey && r.colorLabel).map(r => r.projectKey)
-  );
+  const validProjectKeys = new Set(activeRows.map(r => r.projectKey));
 
   const CALENDAR_ID = Session.getActiveUser().getEmail();
   const calendar = CalendarApp.getCalendarById(CALENDAR_ID);
@@ -184,6 +187,7 @@ function importCalendarEvents(startDateStr, endDateStr) {
   const endDate = new Date(endDateStr + 'T23:59:59');
 
   const events = calendar.getEvents(startDate, endDate).map(event => {
+    if (event.getMyStatus() === CalendarApp.GuestStatus.NO) return null;
     const colorNum = event.getColor();
     const projectKey = colorMap[colorNum] || '';
     if (!validProjectKeys.has(projectKey)) return null;
