@@ -824,9 +824,9 @@
     const unselected = CHANGELOG_ITEMS.filter(it => it.status === 'unselected');
     const completed = CHANGELOG_ITEMS.filter(it => it.status === 'done');
 
-    renderChangelogSection(container, 'Future Enhancements', pending);
-    renderChangelogSection(container, 'Unselected Enhancements', unselected);
-    renderChangelogSection(container, 'Completed Changelog', completed);
+    renderChangelogSection(container, '🌱 Future Enhancements', pending);
+    renderChangelogSection(container, '🚫 Unselected Enhancements', unselected);
+    renderChangelogSection(container, '✅ Completed Changelog', completed);
 
     document.getElementById('changelog-count').textContent =
       pending.length + ' future enhancement(s) · ' + unselected.length + ' unselected · ' + completed.length + ' completed';
