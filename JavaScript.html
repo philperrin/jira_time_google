@@ -160,6 +160,7 @@
   window.timecardEvents = [];
   window.issueOptions = [];
   window.worklogRows = [];
+  window.timecardAllocation = [];
 
   function loadTimecardEvents() {
     const start = document.getElementById('tc-start-date').value;
@@ -173,6 +174,11 @@
       .withSuccessHandler(issues => { window.issueOptions = issues; })
       .withFailureHandler(e => showStatus('tc-status', 'Could not load issues for dropdowns: ' + e.message, 'error'))
       .getJiraIssues();
+
+    // Load allocation (for the manual-entry Project dropdown) in parallel
+    google.script.run
+      .withSuccessHandler(rows => { window.timecardAllocation = rows; })
+      .getAllocation();
 
     google.script.run
       .withSuccessHandler(events => {
@@ -211,14 +217,16 @@
 
           const table = document.createElement('table');
     table.style.tableLayout = 'fixed';
+    table.dataset.date = date;
     table.innerHTML = `<thead><tr>
-      <th style="width:14%">Event</th>
-      <th style="width:26%">Description</th>
+      <th style="width:13%">Event</th>
+      <th style="width:24%">Description</th>
       <th style="width:8%">Start</th>
       <th style="width:8%">End</th>
       <th style="width:8%">Project</th>
-      <th style="width:22%">Jira Issue</th>
+      <th style="width:20%">Jira Issue</th>
       <th style="width:7%">Duration (h)</th>
+      <th style="width:5%"></th>
     </tr></thead>`;
       const tbody = document.createElement('tbody');
 
@@ -244,6 +252,13 @@
 
       table.appendChild(tbody);
       container.appendChild(table);
+
+      const addEntryBtn = document.createElement('button');
+      addEntryBtn.className = 'btn btn-secondary';
+      addEntryBtn.style.marginTop = '8px';
+      addEntryBtn.textContent = '+ Add Entry';
+      addEntryBtn.onclick = function() { addManualEntry(date); };
+      container.appendChild(addEntryBtn);
 
       const dayTotal = document.createElement('div');
       dayTotal.className = 'tc-day-total';
@@ -283,9 +298,93 @@
     }, 300);
   }
 
+  function to12Hour(hhmm) {
+    const [hStr, mStr] = hhmm.split(':');
+    let h = parseInt(hStr, 10);
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    h = h % 12; if (h === 0) h = 12;
+    return String(h).padStart(2, '0') + ':' + mStr + ' ' + ampm;
+  }
+
+  function buildProjectOptionsHtml() {
+    return (window.timecardAllocation || [])
+      .filter(r => r.projectKey)
+      .map(r => '<option value="' + esc(r.projectKey) + '">' + esc(r.projectName || r.projectKey) + '</option>')
+      .join('');
+  }
+
+  function addManualEntry(date) {
+    const idx = window.timecardEvents.length;
+    const newEvent = { title: 'Manual entry', date: date, start: '', end: '', description: '', projectKey: '', issueKey: '', duration: 0 };
+    window.timecardEvents.push(newEvent);
+
+    const tbody = document.querySelector('table[data-date="' + date + '"] tbody');
+    if (!tbody) return;
+
+    const tr = document.createElement('tr');
+    tr.innerHTML =
+      '<td>Manual entry</td>' +
+      '<td></td>' +
+      '<td><input type="time" class="tc-manual-start" style="width:100%"></td>' +
+      '<td><input type="time" class="tc-manual-end" style="width:100%"></td>' +
+      '<td><select class="tc-manual-project" style="width:100%"><option value="">— select —</option>' + buildProjectOptionsHtml() + '</select></td>' +
+      '<td><select data-idx="' + idx + '" class="tc-issue-select" style="min-width:200px;"><option value="">— select —</option></select></td>' +
+      '<td class="tc-manual-duration">0.00</td>' +
+      '<td><button class="btn" style="padding:4px 8px;" onclick="removeManualEntry(this, ' + idx + ')" title="Remove entry" aria-label="Remove entry">✕</button></td>';
+    tbody.appendChild(tr);
+
+    const startInput = tr.querySelector('.tc-manual-start');
+    const endInput = tr.querySelector('.tc-manual-end');
+    const projectSelect = tr.querySelector('.tc-manual-project');
+    const issueSelect = tr.querySelector('.tc-issue-select');
+    const durationCell = tr.querySelector('.tc-manual-duration');
+
+    function recomputeDuration() {
+      const start = startInput.value, end = endInput.value;
+      let hours = 0;
+      if (start && end) {
+        const startDate = new Date('1970-01-01T' + start + ':00');
+        const endDate = new Date('1970-01-01T' + end + ':00');
+        hours = Math.max(0, (endDate - startDate) / 3600000);
+      }
+      newEvent.duration = hours;
+      newEvent.start = start ? to12Hour(start) : '';
+      newEvent.end = end ? to12Hour(end) : '';
+      durationCell.textContent = hours.toFixed(2);
+      updateSummaryTable();
+    }
+    startInput.addEventListener('change', recomputeDuration);
+    endInput.addEventListener('change', recomputeDuration);
+
+    projectSelect.addEventListener('change', () => {
+      newEvent.projectKey = projectSelect.value;
+      issueSelect.innerHTML = '<option value="">— select —</option>';
+      (window.issueOptions || []).forEach(issue => {
+        if (issue.projectKey === projectSelect.value) {
+          const opt = document.createElement('option');
+          opt.value = issue.key;
+          opt.textContent = issue.dropdownValue;
+          issueSelect.appendChild(opt);
+        }
+      });
+      updateSummaryTable();
+    });
+
+    issueSelect.addEventListener('change', updateSummaryTable);
+  }
+
+  function removeManualEntry(btn, idx) {
+    window.timecardEvents[idx] = null;
+    const tr = btn.closest('tr');
+    if (tr) tr.remove();
+    updateSummaryTable();
+  }
+
   function updateSummaryTable() {
-    const events = window.timecardEvents;
-    if (!events || !events.length) return;
+    const allEvents = window.timecardEvents;
+    if (!allEvents || !allEvents.length) return;
+    const events = allEvents.filter(Boolean);
+    if (!events.length) return;
 
     const dates = [...new Set(events.map(e => e.date))].sort();
     const projects = [...new Set(events.map(e => e.projectKey))].sort();
@@ -296,7 +395,7 @@
 
     document.querySelectorAll('.tc-issue-select').forEach(sel => {
       if (!sel.value) return;
-      const ev = events[parseInt(sel.dataset.idx)];
+      const ev = allEvents[parseInt(sel.dataset.idx)];
       if (!ev) return;
       sums[ev.projectKey][ev.date] = (sums[ev.projectKey][ev.date] || 0) + (ev.duration || 0);
     });
@@ -325,7 +424,7 @@
       const dayEvents = events.filter(e => e.date === date);
       let dayTotal = 0, assignedCount = 0;
       dayEvents.forEach(e => {
-        const idx = events.indexOf(e);
+        const idx = allEvents.indexOf(e);
         const sel = document.querySelector('.tc-issue-select[data-idx="' + idx + '"]');
         if (sel && sel.value) { dayTotal += e.duration || 0; assignedCount++; }
       });
@@ -358,6 +457,15 @@
   }
 
   // ── Assignments Tab ──────────────────────────────────────────
+  (function initScheduleDate() {
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const fmt = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    document.addEventListener('DOMContentLoaded', () => {
+      document.getElementById('schedule-date').value = fmt(tomorrow);
+    });
+  })();
+
   window.loadedIssues = [];
 
   function loadAssignments() {
@@ -398,6 +506,14 @@
       group.classList.add('collapsed');
       if (toggle) toggle.textContent = '▶';
     }
+  }
+
+  function setAllGroupsCollapsed(collapsed) {
+    document.querySelectorAll('#assignments-container .project-group').forEach(group => {
+      const toggle = group.querySelector('.group-toggle');
+      group.classList.toggle('collapsed', collapsed);
+      if (toggle) toggle.textContent = collapsed ? '▶' : '▼';
+    });
   }
 
   function renderAssignments(issues, nameMap) {
@@ -474,6 +590,8 @@
 
     container.style.display = '';
     document.getElementById('schedule-toolbar').style.display = '';
+    document.getElementById('expand-all-btn').style.display = '';
+    document.getElementById('collapse-all-btn').style.display = '';
     setDensity(localStorage.getItem('jtt-density') || 'comfortable');
   }
 
@@ -496,6 +614,10 @@
       showStatus('schedule-status', 'Enter hours in the Schedule column first.', 'info');
       return;
     }
+    const date = document.getElementById('schedule-date').value;
+    const time = document.getElementById('schedule-time').value || '09:00';
+    if (!date) { showStatus('schedule-status', 'Choose a start date first.', 'info'); return; }
+    const startDateTimeIso = `${date}T${time}:00`;
     setLoading('schedule-btn', true, '⏱ Schedule Calendar Events');
     showStatus('schedule-status', 'Creating calendar events…', 'info');
     google.script.run
@@ -508,7 +630,7 @@
         setLoading('schedule-btn', false, '⏱ Schedule Calendar Events');
         showStatus('schedule-status', 'Error: ' + e.message, 'error');
       })
-      .scheduleCalendarEvents(toSchedule);
+      .scheduleCalendarEvents(toSchedule, startDateTimeIso);
   }
 
   // ── Create Issue Tab ─────────────────────────────────────────
@@ -543,8 +665,26 @@
   }
 
   // ── Worklog Tab ──────────────────────────────────────────────
-  function buildPivot(rows) {
-    const year = new Date().getFullYear();
+  (function initWorklogYearSelect() {
+    const select = document.getElementById('wl-year');
+    const currentYear = new Date().getFullYear();
+    const populate = () => {
+      select.innerHTML = '';
+      for (let y = currentYear; y >= currentYear - 3; y--) {
+        const opt = document.createElement('option');
+        opt.value = y;
+        opt.textContent = y;
+        select.appendChild(opt);
+      }
+    };
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', populate);
+    } else {
+      populate();
+    }
+  })();
+
+  function buildPivot(rows, year) {
     const MONTHS = ['January','February','March','April','May','June',
                     'July','August','September','October','November','December'];
 
@@ -586,13 +726,14 @@
   }
 
   function loadWorklog() {
+    const year = parseInt(document.getElementById('wl-year').value) || new Date().getFullYear();
     setLoading('wl-load-btn', true, 'Pull Worklog');
-    showStatus('wl-status', 'Fetching worklogs for this year…', 'info');
+    showStatus('wl-status', `Fetching worklogs for ${year}…`, 'info');
     google.script.run
       .withSuccessHandler(rows => {
         setLoading('wl-load-btn', false, 'Pull Worklog');
         window.worklogRows = rows;
-        buildPivot(rows);
+        buildPivot(rows, year);
         document.getElementById('wl-export-btn').style.display = '';
         document.getElementById('wl-count').textContent = `${rows.length} entries`;
         showStatus('wl-status', '', '');
@@ -601,7 +742,7 @@
         setLoading('wl-load-btn', false, 'Pull Worklog');
         showStatus('wl-status', 'Error: ' + e.message, 'error');
       })
-      .getWorklogs();
+      .getWorklogs(year);
   }
 
   function exportWorklogCsv() {
@@ -616,7 +757,7 @@
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'jira-worklog-' + new Date().getFullYear() + '.csv';
+    a.download = 'jira-worklog-' + (document.getElementById('wl-year').value || new Date().getFullYear()) + '.csv';
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);

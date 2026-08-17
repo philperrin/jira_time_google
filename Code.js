@@ -122,13 +122,33 @@ function getJiraIssues() {
   }));
 }
 
+/** Workday window: 9:00 AM - 5:00 PM. */
+const SCHEDULE_WORKDAY_START_HOUR = 9;
+const SCHEDULE_WORKDAY_END_HOUR = 17;
+
+/** Returns 9:00 AM on the next work day (skipping Saturday/Sunday) after the given date. */
+function nextScheduleWorkDay_(date) {
+  const next = new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1, SCHEDULE_WORKDAY_START_HOUR, 0, 0, 0);
+  while (next.getDay() === 0 || next.getDay() === 6) {
+    next.setDate(next.getDate() + 1);
+  }
+  return next;
+}
+
+/** Returns remaining milliseconds before 5:00 PM on the cursor's calendar day (0 if already past). */
+function scheduleDayCapacityMs_(cursor) {
+  const dayEnd = new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate(), SCHEDULE_WORKDAY_END_HOUR, 0, 0, 0);
+  return Math.max(0, dayEnd.getTime() - cursor.getTime());
+}
+
 /**
  * Creates Google Calendar events from the provided toSchedule array.
  * Each event's title is the jiraProject, description includes dropdownValue and JIRA link.
- * Events are scheduled sequentially starting at the next full hour from now.
+ * Events are scheduled sequentially starting at startDateTimeIso, capped at 8h/day
+ * (9:00 AM-5:00 PM); any remainder rolls to the next work day (weekends skipped).
  * Returns { created: number, startTime: string }
  */
-function scheduleCalendarEvents(toSchedule) {
+function scheduleCalendarEvents(toSchedule, startDateTimeIso) {
   const JIRA_URL = getUserProperties().getProperty('JIRA_BASE_URL');
   const allocation = getAllocation();
 
@@ -152,26 +172,39 @@ function scheduleCalendarEvents(toSchedule) {
       .map(r => [r.projectKey, HEX_TO_EVENT_COLOR[r.colorHex] || null])
   );
 
-  const now = new Date();
-  const startTime = new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours() + 1, 0, 0, 0);
+  const startTime = new Date(startDateTimeIso);
   const calendar = CalendarApp.getDefaultCalendar();
   let cursor = new Date(startTime);
+  let created = 0;
 
   toSchedule.forEach(entry => {
-    const durationMs = entry.hours * 60 * 60 * 1000;
-    const endTime = new Date(cursor.getTime() + durationMs);
-    const event = calendar.createEvent(
-      entry.jiraProject,
-      cursor,
-      endTime,
-      { description: `${entry.dropdownValue}\n${JIRA_URL}/browse/${entry.key}` }
-    );
-    const color = projectColorMap[entry.jiraProject];
-    if (color) event.setColor(color);
-    cursor = endTime;
+    let remainingMs = entry.hours * 60 * 60 * 1000;
+
+    while (remainingMs > 0) {
+      const capacityMs = scheduleDayCapacityMs_(cursor);
+      if (capacityMs <= 0) {
+        cursor = nextScheduleWorkDay_(cursor);
+        continue;
+      }
+
+      const segmentMs = Math.min(remainingMs, capacityMs);
+      const endTime = new Date(cursor.getTime() + segmentMs);
+      const event = calendar.createEvent(
+        entry.jiraProject,
+        cursor,
+        endTime,
+        { description: `${entry.dropdownValue}\n${JIRA_URL}/browse/${entry.key}` }
+      );
+      const color = projectColorMap[entry.jiraProject];
+      if (color) event.setColor(color);
+      created++;
+
+      remainingMs -= segmentMs;
+      cursor = remainingMs > 0 ? nextScheduleWorkDay_(cursor) : endTime;
+    }
   });
 
-  return { created: toSchedule.length, startTime: startTime.toLocaleTimeString() };
+  return { created, startTime: startTime.toLocaleTimeString() };
 }
 
 /**
@@ -313,16 +346,18 @@ started (ISO), hours, and month.
  * Returns an array of {projectKey, issueKey, summary, timeSpent, started, hours, month}.
  * Handles paginated issue results (nextPageToken) and paginated worklog fields (fetchAll).
  */
-function getWorklogs() {
+function getWorklogs(year) {
   const JIRA_URL = getUserProperties().getProperty('JIRA_BASE_URL');
   const JIRA_API_KEY = getUserProperties().getProperty('JIRA_API_KEY');
   if (!JIRA_URL || !JIRA_API_KEY) throw new Error('Jira URL and API key must be configured in the Config tab.');
   const authHeader = getAuthHeader_();
   const userEmail = Session.getActiveUser().getEmail();
-  const currentYear = new Date().getFullYear();
-  const fromDate = `${currentYear}-01-01`;
-  const fromTimestamp = new Date(currentYear, 0, 1).getTime();
-  const JQL = encodeURIComponent(`worklogAuthor=currentUser() AND worklogDate >= ${fromDate}`);
+  const targetYear = year || new Date().getFullYear();
+  const fromDate = `${targetYear}-01-01`;
+  const toDate = `${targetYear}-12-31`;
+  const fromTimestamp = new Date(targetYear, 0, 1).getTime();
+  const toTimestamp = new Date(targetYear, 11, 31, 23, 59, 59, 999).getTime();
+  const JQL = encodeURIComponent(`worklogAuthor=currentUser() AND worklogDate >= ${fromDate} AND worklogDate <= ${toDate}`);
   const BASE_ENDPOINT = `${JIRA_URL}/rest/api/3/search/jql?fields=key,summary,worklog,project&jql=${JQL}&maxResults=100`;
   const fetchOpts = { headers: { Authorization: authHeader }, method: 'get', muteHttpExceptions: true };
 
@@ -371,7 +406,7 @@ function getWorklogs() {
     (issue.fields.worklog && issue.fields.worklog.worklogs || []).forEach(log => {
       if (!log.author || log.author.emailAddress !== userEmail) return;
       const startedDate = new Date(log.started || '');
-      if (!log.started || startedDate.getTime() < fromTimestamp) return;
+      if (!log.started || startedDate.getTime() < fromTimestamp || startedDate.getTime() > toTimestamp) return;
       rows.push({
         projectKey, issueKey, summary,
         timeSpent: log.timeSpent || '',
