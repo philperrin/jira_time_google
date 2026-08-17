@@ -622,4 +622,126 @@
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
   }
+
+  // ── Changelog Tab ────────────────────────────────────────────
+  const CHANGELOG_ITEMS = [
+    { id: 1, section: 'High Impact', effort: 'Medium', title: 'Remove or defer <code>getWorklogTotals_</code> from Assignments load', files: '<code>Code.js</code> → <code>getJiraIssues()</code>',
+      body: '<p>Every "Load Assignments" click triggers a batch of worklog API calls — one per active issue — just to populate the "Time Logged (h)" column. On 30+ issues this is the most expensive operation in the app and makes the Assignments tab feel slow.</p>' +
+            '<p>It\'s also wasted a second time: <code>loadTimecardEvents()</code> in <code>JavaScript.html</code> calls <code>getJiraIssues()</code> purely to populate the issue dropdowns, but the Timecard tab never displays <code>timeLogged</code>. Every "Import Events" click pays for the full worklog-totals batch fetch for no benefit.</p>' +
+            '<ul><li><strong>Remove the column</strong> from Assignments entirely (the same data is visible in the Worklog tab)</li>' +
+            '<li><strong>Defer it</strong>: show assignments immediately with dashes, then populate time-logged asynchronously via a secondary button or lazy fetch</li>' +
+            '<li><strong>Split the function</strong>: give Timecard a lightweight issue-list fetch that skips <code>getWorklogTotals_</code> entirely</li></ul>' },
+    { id: 2, section: 'High Impact', effort: 'Small', title: 'Add a year selector to the Worklog tab', files: '<code>Code.js</code> → <code>getWorklogs()</code>, <code>TabWorklog.html</code>, <code>JavaScript.html</code>',
+      body: '<p><code>getWorklogs()</code> hardcodes the start date to January 1 of the current year. There is no way to view a previous year or a custom range.</p>' +
+            '<p>Suggested fix: add a <code>&lt;select&gt;</code> to the Worklog toolbar populated with the current year and the 2–3 prior years. Pass the selected year to the server function instead of always using <code>new Date().getFullYear()</code>. Consider defaulting to a narrower range if full-year fetches prove slow for high-volume users.</p>' },
+    { id: 3, section: 'High Impact', effort: 'Medium', title: 'Add a start-time control to Schedule Calendar Events', files: '<code>Code.js</code> → <code>scheduleCalendarEvents()</code>, <code>TabAssignments.html</code>, <code>JavaScript.html</code>',
+      body: '<p>Events are always scheduled starting at the next full hour from the current time. There is no way to specify a date or starting time, which makes the feature impractical for planning work in advance.</p>' +
+            '<p>Suggested fix: add a date + time input to the schedule toolbar (defaulting to tomorrow 9:00 AM). Pass the chosen start datetime to <code>scheduleCalendarEvents()</code> instead of computing <code>now + 1 hour</code>.</p>' +
+            '<p>Also address the multi-day overflow case: events are currently chained back-to-back with no cap, so a large total (e.g. 40 hours across several issues) creates one continuous block running through nights and weekends. The fix should cap hours scheduled per day (e.g. 8h) and roll remaining time to the next work day.</p>' },
+    { id: 4, section: 'High Impact', effort: 'Small', title: 'Confirm before irreversible actions', files: '<code>JavaScript.html</code> → <code>submitTimecard()</code>, <code>scheduleEvents()</code>',
+      body: '<p>"Send to Jira" (posts real worklogs) and "Schedule Calendar Events" (creates real calendar events) both fire immediately on click with no review step. A misclick or a wrong hours entry creates real data in Jira/Calendar that must be cleaned up manually — there\'s no undo.</p>' +
+            '<p>Suggested fix: show a brief confirmation summary ("Submit 6 worklog(s) totaling 24h to Jira?" / "Create 4 calendar event(s) starting Tue 9:00 AM?") before firing the <code>google.script.run</code> call.</p>' },
+    { id: 17, section: 'High Impact', effort: 'Medium', title: 'Manually add a Timecard entry', files: '<code>TabTimecard.html</code>, <code>JavaScript.html</code>',
+      body: '<p>Timecard entries can currently only come from imported calendar events — there\'s no way to log time for work that wasn\'t tracked on the calendar (e.g. a call or an in-person meeting).</p>' +
+            '<p>Suggested fix: add an "Add Entry" button below each day\'s table on the Timecard tab. Clicking it inserts a new row in that day with blank inputs appropriate to each field — Start time and End time (time inputs), Project (dropdown), and Jira Issue (dropdown, populated from the selected project). The row should participate in the same submit/skip/validation logic as imported rows once filled in.</p>' },
+    { id: 5, section: 'Medium Impact', effort: 'Small', title: 'Explain empty Jira Issue dropdowns on the Timecard tab', files: '<code>JavaScript.html</code> → <code>renderTimecardTable()</code>',
+      body: '<p>When a calendar event\'s color doesn\'t match any allocation entry, or the matched project has no active issues, the Jira Issue dropdown renders with only "— select —" and no explanation. Users have no way to know whether the config is wrong or the project simply has no open issues.</p>' +
+            '<p>Suggested fix: after populating each dropdown, check whether any options were added. If none, insert a disabled option like "No issues found for [projectKey]" or add a warning indicator to the row.</p>' },
+    { id: 6, section: 'Medium Impact', effort: 'Medium', title: 'Replace the Timecard polling loop with callback coordination', files: '<code>JavaScript.html</code> → <code>loadTimecardEvents()</code> / <code>renderTimecardTable()</code>',
+      body: '<p>The <code>setInterval</code> (300 ms × up to 20 tries) that waits for issue options to arrive is fragile. If both the calendar and issues calls are slow, the events table appears before the dropdowns are populated. Worse, if issues still haven\'t arrived after 20 attempts (6s), the loop gives up <strong>silently</strong> — dropdowns stay empty with no error shown to the user.</p>' +
+            '<p>Suggested fix: use a shared state object; whichever of the two <code>google.script.run</code> calls returns second triggers dropdown population. Surface an error state if issue loading fails or times out.</p>' },
+    { id: 7, section: 'Medium Impact', effort: 'Small', title: 'Improve the Allocation config table usability', files: '<code>TabConfig.html</code>',
+      body: '<p>The table has columns that require prior knowledge: <strong>Calendar Color #</strong> (e.g. Sage = 2, Flamingo = 4), <strong>Color Enum Name</strong> (the exact GAS constant name), and an unused <strong>Hours/Week</strong> column.</p>' +
+            '<p>This is enough of a pain point that a developer-only debug tool (<code>Debug.js</code> → <code>validateImportCalendarEvents()</code>) exists specifically to trace color/project mismatches — a strong signal the mapping UI itself needs to be clearer for end users, not just diagnosable after the fact.</p>' +
+            '<p>Suggested fix: add a small reference table or tooltip below the allocation table mapping color numbers to their names and enum values. Consider removing "Hours/Week" until it drives a feature.</p>' },
+    { id: 8, section: 'Medium Impact', effort: 'Small', title: 'Prevent silent data loss when saving allocation rows', files: '<code>JavaScript.html</code> → <code>saveAllocationTable()</code>',
+      body: '<p>Rows missing a <code>projectKey</code> are silently filtered out before saving. If a user fills in a color and project name but forgets the key, that row disappears on save with no warning.</p>' +
+            '<p>Suggested fix: validate before saving and show a status message listing which rows were dropped and why, or block save until required fields are filled.</p>' },
+    { id: 9, section: 'Medium Impact', effort: 'Medium', title: 'Add a way to review individual worklog entries on-screen', files: '<code>TabWorklog.html</code>, <code>JavaScript.html</code>',
+      body: '<p>The on-screen worklog detail table was removed in favor of the monthly pivot view. The only way to see individual worklog line items now is the CSV export — there\'s no way to spot-check data without downloading a file.</p>' +
+            '<p>Suggested fix: add an optional expandable detail view (e.g. click a pivot cell to see the underlying entries for that project/month) or a toggle to show the raw list alongside the pivot.</p>' },
+    { id: 10, section: 'Medium Impact', effort: 'Small', title: 'Add a "Test Connection" action to the Config tab', files: '<code>TabConfig.html</code>, <code>JavaScript.html</code>, <code>Code.js</code>',
+      body: '<p>There is no way to validate the Jira URL and API key until the user visits another tab and gets an error. Typos in the URL or an expired/invalid API key aren\'t caught at the point of entry.</p>' +
+            '<p>Suggested fix: add a "Test Connection" button that calls a lightweight Jira endpoint (e.g. <code>/rest/api/3/myself</code>) and reports success/failure inline.</p>' },
+    { id: 11, section: 'Low Impact / Polish', effort: 'Trivial', title: 'Add a "Clear" button to the Timecard submit toolbar', files: '<code>TabTimecard.html</code>, <code>JavaScript.html</code>',
+      body: '<p>After a successful "Send to Jira," the dropdowns reset but the event table stays visible. There is no way to dismiss the table without clicking "Import Events" again (which re-fetches from the calendar).</p>' +
+            '<p>Suggested fix: add a "Clear" button to <code>#tc-submit-toolbar</code> that hides <code>#tc-table</code> and <code>#tc-submit-toolbar</code> and resets <code>window.timecardEvents</code>.</p>' },
+    { id: 12, section: 'Low Impact / Polish', effort: 'Trivial', title: 'Consider reordering tabs to match daily workflow', files: '<code>Index.html</code>',
+      body: '<p>Current order: Assignments → Timecard → Create Issue → Worklog → Config.</p>' +
+            '<p>The daily workflow is typically: import calendar events (Timecard) → review assignments (Assignments) → review hours (Worklog). "Create Issue" and "Config" are infrequent.</p>' +
+            '<p>Suggested order: <strong>Timecard → Assignments → Worklog → Create Issue → Config</strong>.</p>' },
+    { id: 13, section: 'Low Impact / Polish', effort: 'Small', title: 'Persist collapsed group state on Assignments', files: '<code>JavaScript.html</code> → <code>renderAssignments()</code>',
+      body: '<p>Collapsing project groups is reset every time "Load Assignments" is clicked, since the container is rebuilt from scratch. Users with many projects who prefer a curated view have to re-collapse groups on every reload.</p>' +
+            '<p>Suggested fix: track collapsed project keys in a <code>Set</code> (or <code>localStorage</code>, similar to the density preference) and reapply after render.</p>' },
+    { id: 14, section: 'Low Impact / Polish', effort: 'Trivial', title: 'Show a summary of skipped events on Timecard submit', files: '<code>JavaScript.html</code> → <code>submitTimecard()</code>',
+      body: '<p>Events left without an assigned issue are silently excluded from submission with no indication of how many were skipped.</p>' +
+            '<p>Suggested fix: include a skipped count in the result message, e.g. "Sent 12 worklog(s). 3 event(s) skipped (no issue selected)."</p>' },
+    { id: 15, section: 'Low Impact / Polish', effort: 'Small', title: 'Apply the density toggle consistently across tabs', files: '<code>Stylesheet.html</code>, <code>JavaScript.html</code> → <code>setDensity()</code>',
+      body: '<p>The Comfortable/Compact density toggle only affects the Assignments tab, even though Timecard and Worklog tables have similarly dense layouts.</p>' +
+            '<p>Suggested fix: apply the <code>density-*</code> class at a shared container level (e.g. <code>body</code> or <code>main</code>) so the preference applies app-wide.</p>' },
+    { id: 16, section: 'Low Impact / Polish', effort: 'Trivial', title: 'Add accessible labels to icon-only buttons', files: '<code>JavaScript.html</code>, <code>TabTimecard.html</code>, <code>TabAssignments.html</code>',
+      body: '<p>Buttons using emoji-only or icon-only content (✕ remove-row, ⏱ Schedule Calendar Events, 📥 Send to Jira) lack <code>aria-label</code>/<code>title</code> attributes for screen readers.</p>' +
+            '<p>Suggested fix: add <code>aria-label</code> or <code>title</code> attributes describing the action in plain text.</p>' }
+  ];
+
+  const CHANGELOG_SECTION_ORDER = ['High Impact', 'Medium Impact', 'Low Impact / Polish'];
+
+  function renderChangelog(state) {
+    state = state || {};
+    const container = document.getElementById('changelog-container');
+    container.innerHTML = '';
+    let doneCount = 0;
+
+    CHANGELOG_SECTION_ORDER.forEach(section => {
+      const items = CHANGELOG_ITEMS.filter(it => it.section === section);
+      if (!items.length) return;
+
+      const heading = document.createElement('h2');
+      heading.className = 'section-title changelog-section-heading';
+      heading.textContent = section;
+      container.appendChild(heading);
+
+      items.forEach(item => {
+        const isDone = !!state[item.id];
+        if (isDone) doneCount++;
+
+        const row = document.createElement('div');
+        row.className = 'changelog-item' + (isDone ? ' done' : '');
+        row.dataset.id = item.id;
+
+        row.innerHTML =
+          '<input type="checkbox" ' + (isDone ? 'checked' : '') + ' onchange="toggleChangelogItem(' + item.id + ', this.checked)">' +
+          '<div class="changelog-item-body">' +
+            '<div class="changelog-title-row">' +
+              '<span class="changelog-title">#' + item.id + ' — ' + item.title + '</span>' +
+              '<span class="changelog-effort">' + item.effort + '</span>' +
+            '</div>' +
+            '<div class="changelog-files">' + item.files + '</div>' +
+            '<div class="changelog-text">' + item.body + '</div>' +
+          '</div>';
+
+        container.appendChild(row);
+      });
+    });
+
+    document.getElementById('changelog-count').textContent = doneCount + ' of ' + CHANGELOG_ITEMS.length + ' done';
+  }
+
+  function loadChangelog() {
+    google.script.run
+      .withSuccessHandler(renderChangelog)
+      .withFailureHandler(e => showStatus('changelog-status', 'Error: ' + e.message, 'error'))
+      .getChangelogState();
+  }
+
+  function toggleChangelogItem(id, done) {
+    const row = document.querySelector('.changelog-item[data-id="' + id + '"]');
+    if (row) row.classList.toggle('done', done);
+    google.script.run
+      .withSuccessHandler(renderChangelog)
+      .withFailureHandler(e => showStatus('changelog-status', 'Error: ' + e.message, 'error'))
+      .saveChangelogItemState(id, done);
+  }
+
+  document.querySelector('[data-tab="changelog"]').addEventListener('click', loadChangelog);
 </script>

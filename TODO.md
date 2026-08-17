@@ -49,6 +49,15 @@ Suggested fix: show a brief confirmation summary ("Submit 6 worklog(s) totaling 
 
 ---
 
+### 17. Manually add a Timecard entry
+**Files:** `TabTimecard.html`, `JavaScript.html`
+
+Timecard entries can currently only come from imported calendar events — there's no way to log time for work that wasn't tracked on the calendar (e.g. a call or an in-person meeting).
+
+Suggested fix: add an "Add Entry" button below each day's table on the Timecard tab. Clicking it inserts a new row in that day with blank inputs appropriate to each field — Start time and End time (time inputs), Project (dropdown, same source as the allocation config), and Jira Issue (dropdown, populated from the selected project like existing rows). The row should participate in the same submit/skip/validation logic as imported rows once the fields are filled in.
+
+---
+
 ## Medium Impact
 
 ### 5. Explain empty Jira Issue dropdowns on the Timecard tab
@@ -195,3 +204,4 @@ The on-screen worklog detail table (with both "Time Spent" and "Hours" columns) 
 | 14 | Skipped-event summary on Timecard submit | `JavaScript.html` | Trivial |
 | 15 | App-wide density toggle | `Stylesheet.html`, `JavaScript.html` | Small |
 | 16 | Accessible labels for icon-only buttons | `JavaScript.html`, `TabTimecard.html`, `TabAssignments.html` | Trivial |
+| 17 | Manually add a Timecard entry | `TabTimecard.html`, `JavaScript.html` | Medium |

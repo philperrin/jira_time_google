@@ -54,6 +54,25 @@ function saveAllocation(rows) {
   getUserProperties().setProperty('ALLOCATION', JSON.stringify(rows));
 }
 
+/** Returns a map of changelog item id -> done (true) for the current user. */
+function getChangelogState() {
+  const raw = getUserProperties().getProperty('CHANGELOG_STATE');
+  return raw ? JSON.parse(raw) : {};
+}
+
+/** Marks a single changelog item done/not-done and returns the updated state map. */
+function saveChangelogItemState(id, done) {
+  const props = getUserProperties();
+  const state = getChangelogState();
+  if (done) {
+    state[id] = true;
+  } else {
+    delete state[id];
+  }
+  props.setProperty('CHANGELOG_STATE', JSON.stringify(state));
+  return state;
+}
+
 /*
 -----------------------------------------------
 00: Fetch active Jira issues for the standalone web app.
