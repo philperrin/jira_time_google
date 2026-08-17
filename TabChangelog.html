@@ -1,5 +1,8 @@
 <div class="toolbar">
   <span id="changelog-count" style="color:#5f6368;font-size:13px;"></span>
+  <span style="flex:1;"></span>
+  <button class="btn btn-secondary" id="changelog-expand-all-btn" onclick="setAllChangelogGroupsCollapsed(false)">Expand All</button>
+  <button class="btn btn-secondary" id="changelog-collapse-all-btn" onclick="setAllChangelogGroupsCollapsed(true)">Collapse All</button>
 </div>
 <div id="changelog-status" class="status-msg"></div>
 <div id="changelog-container"></div>
