@@ -7,9 +7,9 @@
   <?!= include('Stylesheet'); ?>
 </head>
 <body>
-  <header><h1>Jira Time Tracker</h1></header>
+  <header id="app-title"><h1>Jira Time Tracker</h1></header>
   <nav>
-    <button class="tab-btn active" data-tab="assignments">Assignments</button>
+    <button class="tab-btn" data-tab="assignments">Assignments</button>
     <button class="tab-btn" data-tab="timecard">Timecard</button>
     <button class="tab-btn" data-tab="create-issue">Create Issue</button>
     <button class="tab-btn" data-tab="worklog">Worklog</button>
@@ -17,7 +17,10 @@
     <button class="tab-btn" data-tab="changelog">Changelog</button>
   </nav>
   <main>
-    <section id="tab-assignments" class="tab-section active">
+    <section id="tab-home" class="tab-section active">
+      <?!= include('TabHome'); ?>
+    </section>
+    <section id="tab-assignments" class="tab-section">
       <?!= include('TabAssignments'); ?>
     </section>
     <section id="tab-timecard" class="tab-section">

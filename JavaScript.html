@@ -41,6 +41,12 @@
     });
   });
 
+  document.getElementById('app-title').addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-section').forEach(s => s.classList.remove('active'));
+    document.getElementById('tab-home').classList.add('active');
+  });
+
   function showStatus(elementId, message, type) {
     const el = document.getElementById(elementId);
     if (!el) return;
