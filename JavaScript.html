@@ -794,7 +794,9 @@
       row.innerHTML =
         '<div class="changelog-item-body">' +
           '<div class="changelog-title-row">' +
-            '<span class="changelog-title">#' + item.id + ' — ' + item.title + '</span>' +
+            '<span class="changelog-title">#' + item.id + ' — ' + item.title +
+              (item.jiraId ? ' <span class="changelog-jira-id">(' + item.jiraId + ')</span>' : '') +
+            '</span>' +
           '</div>' +
           '<div class="changelog-files">' + item.files + '</div>' +
           '<div class="changelog-text">' + item.body + '</div>' +
