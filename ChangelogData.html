@@ -57,7 +57,10 @@
     { id: 15, status: 'pending', section: 'Low Impact / Polish', jiraId: 'JTTP-21', title: 'Apply the density toggle consistently across tabs', files: '<code>Stylesheet.html</code>, <code>JavaScript.html</code> → <code>setDensity()</code>',
       body: '<p>The Comfortable/Compact density toggle only affects the Assignments tab, even though Timecard and Worklog tables have similarly dense layouts.</p>' +
             '<p>Suggested fix: apply the <code>density-*</code> class at a shared container level (e.g. <code>body</code> or <code>main</code>) so the preference applies app-wide.</p>' },
-    { id: 16, status: 'pending', section: 'Low Impact / Polish', jiraId: 'JTTP-22', title: 'Add accessible labels to icon-only buttons', files: '<code>JavaScript.html</code>, <code>TabTimecard.html</code>, <code>TabAssignments.html</code>',
+    { id: 16, status: 'pending', section: 'Low Impact / Polish', jiraId: '', title: 'Incorporate Colorizer', files: '',
+      body: '<p>Integrate colorizer script into this so they intentionally work together - same color references, keywords, etc.</p>' +
+            '<p>Use code from this to run continuously: https://script.google.com/home/projects/15AsEH9B656zhBZhcc6axPDLREVZeCibHkneC_9U0i79mtxTtDGp395vU/edit</p>' },
+    { id: 17, status: 'pending', section: 'Low Impact / Polish', jiraId: 'JTTP-22', title: 'Add accessible labels to icon-only buttons', files: '<code>JavaScript.html</code>, <code>TabTimecard.html</code>, <code>TabAssignments.html</code>',
       body: '<p>Buttons using emoji-only or icon-only content (✕ remove-row, ⏱ Schedule Calendar Events, 📥 Send to Jira) lack <code>aria-label</code>/<code>title</code> attributes for screen readers.</p>' +
             '<p>Suggested fix: add <code>aria-label</code> or <code>title</code> attributes describing the action in plain text.</p>' }
   ];
