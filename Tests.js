@@ -634,3 +634,50 @@ test('sendTimeEntries counts succeeded/failed against mocked responses and recor
     });
   });
 });
+
+/*
+-----------------------------------------------
+05: Allocation tab
+-----------------------------------------------
+*/
+test('getAllocationValues_ returns {} for a year never saved', () => {
+  withMockProperties({}, () => {
+    assertEquals(getAllocationValues_(2026), {});
+  });
+});
+
+test('getAllocationValues_ returns the saved sparse grid for a saved year', () => {
+  withMockProperties({ ALLOCATION_VALUES: JSON.stringify({ 2026: { ABC: { 3: 40 } } }) }, () => {
+    assertEquals(getAllocationValues_(2026), { ABC: { 3: 40 } });
+  });
+});
+
+test('getAllocationTabData sorts project keys and excludes ignored ones', () => {
+  const searchBody = JSON.stringify({
+    issues: [
+      { key: 'ZZZ-1', fields: { summary: 'Z', project: { key: 'ZZZ' }, worklog: { worklogs: [{ author: { emailAddress: 'user@example.com' }, timeSpent: '1h', started: '2026-01-05T09:00:00.000-0700' }], total: 1 } } },
+      { key: 'AAA-1', fields: { summary: 'A', project: { key: 'AAA' }, worklog: { worklogs: [{ author: { emailAddress: 'user@example.com' }, timeSpent: '1h', started: '2026-01-05T09:00:00.000-0700' }], total: 1 } } },
+      { key: 'IGN-1', fields: { summary: 'I', project: { key: 'IGN' }, worklog: { worklogs: [{ author: { emailAddress: 'user@example.com' }, timeSpent: '1h', started: '2026-01-05T09:00:00.000-0700' }], total: 1 } } }
+    ]
+  });
+  withMockSession('user@example.com', null, () => {
+    withMockProperties({
+      JIRA_BASE_URL: 'https://example.atlassian.net',
+      JIRA_API_KEY: 'secret',
+      ALLOCATION: JSON.stringify([{ projectKey: 'IGN', ignore: true }])
+    }, () => {
+      withMockUrlFetch({ fetch: () => mockResponse_(200, searchBody) }, () => {
+        const data = getAllocationTabData(2026);
+        assertEquals(data.projects, ['AAA', 'ZZZ']);
+      });
+    });
+  });
+});
+
+test('saveAllocationGrid replaces only the given year, leaving other years untouched', () => {
+  withMockProperties({ ALLOCATION_VALUES: JSON.stringify({ 2025: { ABC: { 1: 10 } } }) }, () => {
+    saveAllocationGrid(2026, { ABC: { 2: 20 } });
+    const raw = JSON.parse(PropertiesService.getUserProperties().getProperty('ALLOCATION_VALUES'));
+    assertEquals(raw, { 2025: { ABC: { 1: 10 } }, 2026: { ABC: { 2: 20 } } });
+  });
+});
