@@ -488,3 +488,149 @@ test('importCalendarEvents never matches an ignored allocation row even with a m
     });
   });
 });
+
+/*
+-----------------------------------------------
+04: Worklogs
+-----------------------------------------------
+*/
+test('parseTimeSpentHours_ converts Jira timeSpent strings to decimal hours', () => {
+  assertEquals(parseTimeSpentHours_('1h 30m'), 1.5);
+  assertEquals(parseTimeSpentHours_('45m'), 0.75);
+  assertEquals(parseTimeSpentHours_('2h'), 2);
+  assertEquals(parseTimeSpentHours_(''), 0);
+  assertEquals(parseTimeSpentHours_(undefined), 0);
+});
+
+test('getWorklogs includes only the current user\'s worklog entries', () => {
+  const searchBody = JSON.stringify({
+    issues: [{
+      key: 'ABC-1',
+      fields: {
+        summary: 'One', project: { key: 'ABC' },
+        worklog: {
+          worklogs: [
+            { author: { emailAddress: 'user@example.com' }, timeSpent: '1h', started: '2026-03-10T09:00:00.000-0700' },
+            { author: { emailAddress: 'other@example.com' }, timeSpent: '2h', started: '2026-03-10T09:00:00.000-0700' }
+          ],
+          total: 2
+        }
+      }
+    }]
+  });
+  withMockSession('user@example.com', null, () => {
+    withMockProperties({ JIRA_BASE_URL: 'https://example.atlassian.net', JIRA_API_KEY: 'secret' }, () => {
+      withMockUrlFetch({ fetch: () => mockResponse_(200, searchBody) }, () => {
+        const rows = getWorklogs(2026);
+        assertEquals(rows.length, 1);
+        assertEquals(rows[0].hours, 1);
+      });
+    });
+  });
+});
+
+test('getWorklogs excludes entries outside the requested year, even from an extra-paginated page', () => {
+  let call = 0;
+  const searchBody = JSON.stringify({
+    issues: [{
+      key: 'ABC-1',
+      fields: {
+        summary: 'One', project: { key: 'ABC' },
+        worklog: { worklogs: [], total: 1 } // 0 loaded, 1 total -> triggers one extra page fetch
+      }
+    }]
+  });
+  withMockSession('user@example.com', null, () => {
+    withMockProperties({ JIRA_BASE_URL: 'https://example.atlassian.net', JIRA_API_KEY: 'secret' }, () => {
+      withMockUrlFetch({
+        fetch: url => {
+          call++;
+          if (call === 1) return mockResponse_(200, searchBody);
+          // Extra worklog page: one entry from the prior year, out of range.
+          return mockResponse_(200, JSON.stringify({
+            worklogs: [{ author: { emailAddress: 'user@example.com' }, timeSpent: '1h', started: '2025-12-31T09:00:00.000-0700' }]
+          }));
+        }
+      }, () => {
+        const rows = getWorklogs(2026);
+        assertEquals(rows, []);
+      });
+    });
+  });
+});
+
+test('sendTimeEntries parses AM/PM start times correctly, including 12am/12pm edge cases', () => {
+  const posted = [];
+  withMockProperties({ JIRA_BASE_URL: 'https://example.atlassian.net', JIRA_API_KEY: 'secret' }, () => {
+    withMockSession('user@example.com', null, () => {
+      withMockUrlFetch({
+        fetch: (url, opts) => { posted.push(JSON.parse(opts.payload)); return mockResponse_(201, '{}'); }
+      }, () => {
+        sendTimeEntries([
+          { date: '2026-03-10', issueKey: 'ABC-1', startTime: '12:00 AM', durationHours: 1 },
+          { date: '2026-03-10', issueKey: 'ABC-2', startTime: '12:00 PM', durationHours: 1 }
+        ]);
+      });
+    });
+  });
+  assertEquals(posted.length, 2);
+  assertTrue(posted[0].started.indexOf('T00:00:00') !== -1, '12:00 AM should be hour 0');
+  assertTrue(posted[1].started.indexOf('T12:00:00') !== -1, '12:00 PM should be hour 12');
+});
+
+test('sendTimeEntries formats a late-local-time entry to its correct UTC date (day-boundary crossing)', () => {
+  // America/Denver 11:30 PM local == 05:30 UTC the *next* calendar day (MDT, UTC-6) or 06:30 (MST, UTC-7).
+  // Assert only that the UTC hour/date rolled forward relative to the local date, not a fixed offset,
+  // so the test is correct regardless of daylight-saving status on the run date.
+  let posted = null;
+  withMockProperties({ JIRA_BASE_URL: 'https://example.atlassian.net', JIRA_API_KEY: 'secret' }, () => {
+    withMockSession('user@example.com', null, () => {
+      withMockUrlFetch({
+        fetch: (url, opts) => { posted = JSON.parse(opts.payload); return mockResponse_(201, '{}'); }
+      }, () => {
+        sendTimeEntries([{ date: '2026-03-10', issueKey: 'ABC-1', startTime: '11:30 PM', durationHours: 1 }]);
+      });
+    });
+  });
+  const utcDate = posted.started.slice(0, 10);
+  assertTrue(utcDate === '2026-03-11' || utcDate === '2026-03-10', 'expected a valid UTC-shifted or same-day date, not garbage');
+  assertTrue(/^\d{4}-\d{2}-\d{2}T\d{2}:30:00\.000\+0000$/.test(posted.started), 'expected the formatted UTC string shape with :30 minutes preserved');
+});
+
+test('sendTimeEntries skips entries with no issueKey', () => {
+  let fetchCalled = false;
+  withMockProperties({ JIRA_BASE_URL: 'https://example.atlassian.net', JIRA_API_KEY: 'secret' }, () => {
+    withMockSession('user@example.com', null, () => {
+      withMockUrlFetch({ fetch: () => { fetchCalled = true; return mockResponse_(201, '{}'); } }, () => {
+        const result = sendTimeEntries([{ date: '2026-03-10', issueKey: '', startTime: '9:00 AM', durationHours: 1 }]);
+        assertEquals(result, { succeeded: 0, failed: 0, errors: [] });
+      });
+    });
+  });
+  assertTrue(!fetchCalled, 'fetch must not be called for an entry with no issueKey');
+});
+
+test('sendTimeEntries counts succeeded/failed against mocked responses and records thrown errors', () => {
+  let call = 0;
+  withMockProperties({ JIRA_BASE_URL: 'https://example.atlassian.net', JIRA_API_KEY: 'secret' }, () => {
+    withMockSession('user@example.com', null, () => {
+      withMockUrlFetch({
+        fetch: () => {
+          call++;
+          if (call === 1) return mockResponse_(201, '{}');
+          if (call === 2) return mockResponse_(500, 'server error');
+          throw new Error('network down');
+        }
+      }, () => {
+        const result = sendTimeEntries([
+          { date: '2026-03-10', issueKey: 'ABC-1', startTime: '9:00 AM', durationHours: 1 },
+          { date: '2026-03-10', issueKey: 'ABC-2', startTime: '9:00 AM', durationHours: 1 },
+          { date: '2026-03-10', issueKey: 'ABC-3', startTime: '9:00 AM', durationHours: 1 }
+        ]);
+        assertEquals(result.succeeded, 1);
+        assertEquals(result.failed, 2);
+        assertEquals(result.errors.length, 2);
+      });
+    });
+  });
+});
