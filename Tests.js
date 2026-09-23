@@ -320,3 +320,74 @@ test('markIssueDone throws a clear error when no Done transition exists', () => 
     });
   });
 });
+
+/*
+-----------------------------------------------
+00c: Scheduling
+-----------------------------------------------
+*/
+test('nextScheduleWorkDay_ skips a weekend from Friday to Monday', () => {
+  const friday = new Date(2026, 8, 25, 14, 0, 0); // Friday Sep 25 2026
+  const next = nextScheduleWorkDay_(friday);
+  assertEquals([next.getFullYear(), next.getMonth(), next.getDate(), next.getHours()], [2026, 8, 28, 9]);
+});
+
+test('nextScheduleWorkDay_ moves to the very next day mid-week', () => {
+  const tuesday = new Date(2026, 8, 22, 10, 0, 0); // Tuesday Sep 22 2026
+  const next = nextScheduleWorkDay_(tuesday);
+  assertEquals([next.getFullYear(), next.getMonth(), next.getDate(), next.getHours()], [2026, 8, 23, 9]);
+});
+
+test('scheduleDayCapacityMs_ returns remaining ms before 5pm', () => {
+  const cursor = new Date(2026, 8, 23, 15, 0, 0); // 3pm
+  assertEquals(scheduleDayCapacityMs_(cursor), 2 * 60 * 60 * 1000);
+});
+
+test('scheduleDayCapacityMs_ returns 0 once past 5pm', () => {
+  const cursor = new Date(2026, 8, 23, 18, 0, 0); // 6pm
+  assertEquals(scheduleDayCapacityMs_(cursor), 0);
+});
+
+function makeFakeCalendar_() {
+  const events = [];
+  return {
+    events,
+    createEvent: (title, start, end, opts) => {
+      const event = { title, start, end, opts, color: null, setColor: c => { event.color = c; } };
+      events.push(event);
+      return event;
+    }
+  };
+}
+
+test('scheduleCalendarEvents creates one event for an entry under 8h', () => {
+  const fakeCalendar = makeFakeCalendar_();
+  withMockProperties({ ALLOCATION: JSON.stringify([{ projectKey: 'ABC', projectName: 'Alpha', colorHex: '#828bc2' }]) }, () => {
+    withMockCalendar(fakeCalendar, () => {
+      const result = scheduleCalendarEvents(
+        [{ jiraProject: 'ABC', key: 'ABC-1', summary: 'Do work', hours: 4 }],
+        '2026-09-22T09:00:00'
+      );
+      assertEquals(result.created, 1);
+      assertEquals(fakeCalendar.events.length, 1);
+      assertEquals(fakeCalendar.events[0].title, 'Client Task Time: Alpha - ABC-1');
+      assertEquals(fakeCalendar.events[0].color, CalendarApp.EventColor.PALE_BLUE);
+    });
+  });
+});
+
+test('scheduleCalendarEvents splits an over-8h entry across a skipped weekend', () => {
+  const fakeCalendar = makeFakeCalendar_();
+  withMockProperties({ ALLOCATION: JSON.stringify([{ projectKey: 'ABC', projectName: 'Alpha', colorHex: '#828bc2' }]) }, () => {
+    withMockCalendar(fakeCalendar, () => {
+      // Friday 9am + 10 hours of work: 8h fills Friday, 2h rolls to Monday.
+      scheduleCalendarEvents(
+        [{ jiraProject: 'ABC', key: 'ABC-1', summary: 'Big task', hours: 10 }],
+        '2026-09-25T09:00:00'
+      );
+      assertEquals(fakeCalendar.events.length, 2);
+      assertEquals(fakeCalendar.events[0].start.getDay(), 5); // Friday
+      assertEquals(fakeCalendar.events[1].start.getDay(), 1); // Monday
+    });
+  });
+});
