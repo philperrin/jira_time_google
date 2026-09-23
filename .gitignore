@@ -1,2 +1,5 @@
-
 .superpowers/
+.DS_Store
+.claude/settings.local.json
+exports/
+workflow.png
