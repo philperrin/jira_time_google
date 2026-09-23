@@ -777,3 +777,70 @@ test('getOrCollectWorklogs serves from cache unless forceRefresh is true', () =>
     getWorklogs = realGetWorklogs;
   }
 });
+
+/*
+-----------------------------------------------
+Create Issue
+-----------------------------------------------
+*/
+test('makeJira builds the expected payload and includes assignee when the user search resolves', () => {
+  let issuePayload = null;
+  withMockSession('user@example.com', null, () => {
+    withMockProperties({ JIRA_BASE_URL: 'https://example.atlassian.net', JIRA_API_KEY: 'secret' }, () => {
+      withMockUrlFetch({
+        fetch: (url, opts) => {
+          if (url.indexOf('/user/search') !== -1) {
+            return mockResponse_(200, JSON.stringify([{ accountId: 'acct-1' }]));
+          }
+          issuePayload = JSON.parse(opts.payload);
+          return mockResponse_(201, JSON.stringify({ key: 'ABC-99' }));
+        }
+      }, () => {
+        const result = makeJira({
+          input1: 'ABC', input2: 'field2', input3: 'field3', input4: 'Summary text',
+          input6: 'Task', input7: '3', notes: 'Some notes'
+        });
+        assertEquals(result, 'Successfully created ABC-99.');
+      });
+    });
+  });
+  assertEquals(issuePayload.fields.project, { key: 'ABC' });
+  assertEquals(issuePayload.fields.summary, 'Summary text');
+  assertEquals(issuePayload.fields.issuetype, { name: 'Task' });
+  assertEquals(issuePayload.fields.priority, { id: '3' });
+  assertEquals(issuePayload.fields.assignee, { accountId: 'acct-1' });
+});
+
+test('makeJira omits assignee when the user search finds no match', () => {
+  let issuePayload = null;
+  withMockSession('user@example.com', null, () => {
+    withMockProperties({ JIRA_BASE_URL: 'https://example.atlassian.net', JIRA_API_KEY: 'secret' }, () => {
+      withMockUrlFetch({
+        fetch: (url, opts) => {
+          if (url.indexOf('/user/search') !== -1) return mockResponse_(200, JSON.stringify([]));
+          issuePayload = JSON.parse(opts.payload);
+          return mockResponse_(201, JSON.stringify({ key: 'ABC-100' }));
+        }
+      }, () => {
+        makeJira({ input1: 'ABC', input2: 'f2', input3: 'f3', input4: 'Summary', input6: 'Task', input7: '3', notes: '' });
+      });
+    });
+  });
+  assertTrue(!('assignee' in issuePayload.fields), 'assignee must be omitted when no match is found');
+});
+
+test('makeJira returns a friendly error string (not a throw) on a non-201 response', () => {
+  withMockSession('user@example.com', null, () => {
+    withMockProperties({ JIRA_BASE_URL: 'https://example.atlassian.net', JIRA_API_KEY: 'secret' }, () => {
+      withMockUrlFetch({
+        fetch: url => {
+          if (url.indexOf('/user/search') !== -1) return mockResponse_(200, JSON.stringify([]));
+          return mockResponse_(400, JSON.stringify({ errors: { summary: 'is required' } }));
+        }
+      }, () => {
+        const result = makeJira({ input1: 'ABC', input2: 'f2', input3: 'f3', input4: '', input6: 'Task', input7: '3', notes: '' });
+        assertTrue(result.indexOf('Error (400)') !== -1, 'expected a friendly error string mentioning the status code');
+      });
+    });
+  });
+});
