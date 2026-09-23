@@ -7,14 +7,16 @@
   <?!= include('Stylesheet'); ?>
 </head>
 <body>
-  <header id="app-title"><h1>Jira Time Tracker</h1></header>
+  <header id="app-title"><h1>Time is Money</h1></header>
   <nav>
     <button class="tab-btn" data-tab="assignments">Assignments</button>
     <button class="tab-btn" data-tab="timecard">Timecard</button>
     <button class="tab-btn" data-tab="create-issue">Create Issue</button>
     <button class="tab-btn" data-tab="worklog">Worklog</button>
+    <button class="tab-btn" data-tab="allocation">Allocation</button>
     <button class="tab-btn" data-tab="config">Config</button>
     <button class="tab-btn" data-tab="changelog">Changelog</button>
+    <button class="tab-btn" data-tab="profit">Utilization</button>
   </nav>
   <main>
     <section id="tab-home" class="tab-section active">
@@ -32,11 +34,17 @@
     <section id="tab-worklog" class="tab-section">
       <?!= include('TabWorklog'); ?>
     </section>
+    <section id="tab-allocation" class="tab-section">
+      <?!= include('TabAllocation'); ?>
+    </section>
     <section id="tab-config" class="tab-section">
       <?!= include('TabConfig'); ?>
     </section>
     <section id="tab-changelog" class="tab-section">
       <?!= include('TabChangelog'); ?>
+    </section>
+    <section id="tab-profit" class="tab-section">
+      <?!= include('TabUtilization'); ?>
     </section>
   </main>
   <?!= include('ChangelogData'); ?>

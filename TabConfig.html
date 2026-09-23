@@ -14,12 +14,33 @@
         <input type="password" id="cfg-api-key" placeholder="Paste your API token here">
         <div style="font-size:12px;color:#5f6368;margin-top:4px;" id="cfg-api-key-status"></div>
       </div>
+      <div class="form-group">
+        <label>Pay Period End Date</label>
+        <input type="date" id="cfg-pay-period-end">
+        <div style="font-size:12px;color:#5f6368;margin-top:4px;">
+          The end date of any one pay period. Every pay period is 2 weeks long, so all other pay periods are calculated from this date.
+        </div>
+      </div>
       <div class="toolbar">
         <button class="btn btn-primary" id="cfg-save-btn" onclick="saveConfig()">Save</button>
+        <button class="btn btn-secondary" id="cfg-test-btn" onclick="testJiraConnection()">Test Connection</button>
       </div>
       <div id="cfg-status" class="status-msg"></div>
+      <div id="cfg-test-status" class="status-msg"></div>
     </div>
   </div>
+</div>
+
+<hr style="margin:24px 0;border:none;border-top:1px solid #dadce0;">
+
+<h3 class="section-title">Display Configuration</h3>
+<p style="font-size:13px;color:#5f6368;margin-bottom:16px;">
+  Controls table row density across the app.
+</p>
+
+<div class="toolbar">
+  <button class="btn btn-secondary" id="density-comfortable-btn" onclick="setDensity('comfortable')">Comfortable</button>
+  <button class="btn btn-secondary" id="density-compact-btn" onclick="setDensity('compact')">Compact</button>
 </div>
 
 <hr style="margin:24px 0;border:none;border-top:1px solid #dadce0;">
@@ -40,7 +61,7 @@
       <th>Calendar Color</th>
       <th>Jira Project Key</th>
       <th>Project Name</th>
-      <th>Hours/Wk</th>
+      <th>Rate</th>
       <th>Ignore</th>
       <th></th>
     </tr>

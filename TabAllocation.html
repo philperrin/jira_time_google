@@ -1,0 +1,17 @@
+<div class="toolbar">
+  <select id="alloc-year" style="width:auto;"></select>
+  <button class="btn btn-primary" id="alloc-load-btn" onclick="loadAllocation()">Set/Review Allocations</button>
+</div>
+<div id="alloc-status" class="status-msg"></div>
+
+<div id="alloc-summary" style="display:none;margin-top:16px;">
+  <h3 class="section-title" style="font-size:14px;">Monthly Allocation by Project</h3>
+  <table id="alloc-pivot">
+    <thead id="alloc-pivot-head"></thead>
+    <tbody id="alloc-pivot-body"></tbody>
+    <tfoot id="alloc-pivot-foot"></tfoot>
+  </table>
+  <div class="toolbar" style="margin-top:12px;">
+    <button class="btn btn-primary" id="alloc-save-btn" onclick="saveAllocationGrid()">Save Allocations</button>
+  </div>
+</div>

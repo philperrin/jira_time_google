@@ -43,6 +43,58 @@ function saveApiKey(key) {
   getUserProperties().setProperty('JIRA_API_KEY', key.trim());
 }
 
+/** Returns the saved pay-period-end-date anchor (ISO date string), or '' if unset. */
+function getPayPeriodEndDate() {
+  return getUserProperties().getProperty('PAY_PERIOD_END_DATE') || '';
+}
+
+/** Saves the pay-period-end-date anchor. Every other pay period (any year, past or future) is derived from this date at a fixed 14-day cadence. */
+function savePayPeriodEndDate(dateStr) {
+  getUserProperties().setProperty('PAY_PERIOD_END_DATE', dateStr);
+}
+
+/** Returns the saved Utilization-tab cost inputs: {hourlyRate, overheadRate (decimal fraction)}. */
+function getUtilRates() {
+  const props = getUserProperties();
+  return {
+    hourlyRate: parseFloat(props.getProperty('UTIL_HOURLY_RATE')) || 0,
+    overheadRate: parseFloat(props.getProperty('UTIL_OVERHEAD_RATE')) || 0
+  };
+}
+
+/** Saves the Utilization-tab cost inputs. overheadRate is a decimal fraction (e.g. 0.40 for 40%). */
+function saveUtilRates(hourlyRate, overheadRate) {
+  getUserProperties().setProperty('UTIL_HOURLY_RATE', String(hourlyRate));
+  getUserProperties().setProperty('UTIL_OVERHEAD_RATE', String(overheadRate));
+}
+
+/**
+ * Tests connectivity to Jira using the given URL/API key, falling back to the
+ * saved config for whichever of the two is blank. Returns {ok, displayName}
+ * on success or {ok: false, error} on failure — never throws.
+ */
+function testJiraConnection(url, apiKey) {
+  const props = getUserProperties();
+  const jiraUrl = (url && url.trim()) ? url.trim().replace(/\/$/, '') : (props.getProperty('JIRA_BASE_URL') || '');
+  const jiraApiKey = (apiKey && apiKey.trim()) ? apiKey.trim() : (props.getProperty('JIRA_API_KEY') || '');
+  if (!jiraUrl || !jiraApiKey) return { ok: false, error: 'Jira URL and API key are required.' };
+
+  const email = Session.getActiveUser().getEmail();
+  const authHeader = 'Basic ' + Utilities.base64Encode(`${email}:${jiraApiKey}`);
+  const options = { headers: { Authorization: authHeader }, method: 'get', muteHttpExceptions: true };
+
+  try {
+    const response = UrlFetchApp.fetch(`${jiraUrl}/rest/api/3/myself`, options);
+    if (response.getResponseCode() >= 400) {
+      return { ok: false, error: `Jira API error (${response.getResponseCode()}): ${response.getContentText()}` };
+    }
+    const data = JSON.parse(response.getContentText());
+    return { ok: true, displayName: data.displayName || email };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
 /** Returns the allocation data (project-to-hours mapping) from user properties. */
 function getAllocation() {
   const raw = getUserProperties().getProperty('ALLOCATION');
@@ -103,6 +155,39 @@ function getJiraIssues() {
   }));
 }
 
+/**
+ * Transitions the given issue to the "Done" status in Jira. Looks up the
+ * issue's available transitions and executes whichever one targets a status
+ * named "Done" (case-insensitive), since the transition ID varies by workflow.
+ * Throws if no such transition is available (e.g. the workflow requires
+ * additional fields, or has no status literally named "Done").
+ */
+function markIssueDone(issueKey) {
+  const JIRA_URL = getUserProperties().getProperty('JIRA_BASE_URL');
+  const JIRA_API_KEY = getUserProperties().getProperty('JIRA_API_KEY');
+  if (!JIRA_URL || !JIRA_API_KEY) throw new Error('Jira URL and API key must be configured in the Config tab.');
+  const authHeader = getAuthHeader_();
+
+  const getOptions = { headers: { Authorization: authHeader }, method: 'get', muteHttpExceptions: true };
+  const getResponse = UrlFetchApp.fetch(`${JIRA_URL}/rest/api/3/issue/${issueKey}/transitions`, getOptions);
+  if (getResponse.getResponseCode() >= 400) throw new Error(`Jira API error (${getResponse.getResponseCode()}): ${getResponse.getContentText()}`);
+  const transitions = JSON.parse(getResponse.getContentText()).transitions || [];
+  const doneTransition = transitions.find(t => t.to && t.to.name && t.to.name.toLowerCase() === 'done');
+  if (!doneTransition) throw new Error(`No "Done" transition is available for ${issueKey}.`);
+
+  const postOptions = {
+    method: 'post',
+    contentType: 'application/json',
+    headers: { Authorization: authHeader },
+    payload: JSON.stringify({ transition: { id: doneTransition.id } }),
+    muteHttpExceptions: true
+  };
+  const postResponse = UrlFetchApp.fetch(`${JIRA_URL}/rest/api/3/issue/${issueKey}/transitions`, postOptions);
+  if (postResponse.getResponseCode() !== 204) {
+    throw new Error(`Jira API error (${postResponse.getResponseCode()}): ${postResponse.getContentText()}`);
+  }
+}
+
 /** Workday window: 9:00 AM - 5:00 PM. */
 const SCHEDULE_WORKDAY_START_HOUR = 9;
 const SCHEDULE_WORKDAY_END_HOUR = 17;
@@ -124,7 +209,8 @@ function scheduleDayCapacityMs_(cursor) {
 
 /**
  * Creates Google Calendar events from the provided toSchedule array.
- * Each event's title is the jiraProject, description includes dropdownValue and JIRA link.
+ * Each event's title is "Client Task Time: <Project Name> - <Jira Key>"; the description
+ * has the Jira summary, the JIRA link, and a note that the block can be scheduled over.
  * Events are scheduled sequentially starting at startDateTimeIso, capped at 8h/day
  * (9:00 AM-5:00 PM); any remainder rolls to the next work day (weekends skipped).
  * Returns { created: number, startTime: string }
@@ -153,6 +239,12 @@ function scheduleCalendarEvents(toSchedule, startDateTimeIso) {
       .map(r => [r.projectKey, HEX_TO_EVENT_COLOR[r.colorHex] || null])
   );
 
+  const projectNameMap = Object.fromEntries(
+    allocation
+      .filter(r => r.projectKey && r.projectName)
+      .map(r => [r.projectKey, r.projectName])
+  );
+
   const startTime = new Date(startDateTimeIso);
   const calendar = CalendarApp.getDefaultCalendar();
   let cursor = new Date(startTime);
@@ -170,11 +262,12 @@ function scheduleCalendarEvents(toSchedule, startDateTimeIso) {
 
       const segmentMs = Math.min(remainingMs, capacityMs);
       const endTime = new Date(cursor.getTime() + segmentMs);
+      const projectName = projectNameMap[entry.jiraProject] || entry.jiraProject;
       const event = calendar.createEvent(
-        entry.jiraProject,
+        `Client Task Time: ${projectName} - ${entry.key}`,
         cursor,
         endTime,
-        { description: `${entry.dropdownValue}\n${JIRA_URL}/browse/${entry.key}` }
+        { description: `${entry.summary}\n${JIRA_URL}/browse/${entry.key}\nTime blocking for client allocation - schedule over if needed.` }
       );
       const color = projectColorMap[entry.jiraProject];
       if (color) event.setColor(color);
@@ -398,6 +491,226 @@ function getWorklogs(year) {
     });
   });
   return rows;
+}
+
+/*
+-----------------------------------------------
+05: Allocation tab — manual monthly hours-allocation entry per project, per year.
+-----------------------------------------------
+*/
+/**
+ * Returns the saved allocation-grid values for a given year:
+ * { [projectKey]: { [month 1-12]: number } }. Sparse — only cells the user
+ * has previously saved are present.
+ */
+function getAllocationValues_(year) {
+  const raw = getUserProperties().getProperty('ALLOCATION_VALUES');
+  const parsed = raw ? JSON.parse(raw) : {};
+  return parsed[year] || {};
+}
+
+/**
+ * Returns the data needed to render the Allocation tab's grid for a year:
+ * - projects: sorted Jira project keys with at least one worklog that year,
+ *   excluding any project marked "Ignore" in the Config tab's allocation table.
+ * - values: previously saved allocation numbers for that year, see getAllocationValues_.
+ */
+function getAllocationTabData(year) {
+  const rows = getWorklogs(year);
+  const ignoredKeys = new Set(getAllocation().filter(r => r.ignore).map(r => r.projectKey));
+  const projects = [...new Set(rows.map(r => r.projectKey))]
+    .filter(key => !ignoredKeys.has(key))
+    .sort();
+  return { projects, values: getAllocationValues_(year) };
+}
+
+/**
+ * Saves the Allocation tab's grid for a given year, replacing only that
+ * year's entry in the ALLOCATION_VALUES user property (other years untouched).
+ * values: { [projectKey]: { [month 1-12]: number } }.
+ */
+function saveAllocationGrid(year, values) {
+  const raw = getUserProperties().getProperty('ALLOCATION_VALUES');
+  const parsed = raw ? JSON.parse(raw) : {};
+  parsed[year] = values;
+  getUserProperties().setProperty('ALLOCATION_VALUES', JSON.stringify(parsed));
+}
+
+/*
+-----------------------------------------------
+06: Utilization tab — worklog caching, pay-period math, and the
+    utilization/revenue/cost/profit calculation.
+-----------------------------------------------
+*/
+/** Returns cached worklog rows for a year (same shape as getWorklogs), or null if never collected. */
+function getCachedWorklogs_(year) {
+  const raw = getUserProperties().getProperty('WORKLOG_CACHE');
+  const parsed = raw ? JSON.parse(raw) : {};
+  return parsed[year] || null;
+}
+
+/** Stores worklog rows for a year, replacing only that year's entry (other years untouched). */
+function setCachedWorklogs_(year, rows) {
+  const raw = getUserProperties().getProperty('WORKLOG_CACHE');
+  const parsed = raw ? JSON.parse(raw) : {};
+  parsed[year] = rows;
+  getUserProperties().setProperty('WORKLOG_CACHE', JSON.stringify(parsed));
+}
+
+/**
+ * Returns worklog rows for a year, serving from WORKLOG_CACHE when already
+ * collected. forceRefresh bypasses the cache and re-fetches from Jira via
+ * getWorklogs(year), overwriting the cached entry for that year.
+ */
+function getOrCollectWorklogs(year, forceRefresh) {
+  if (!forceRefresh) {
+    const cached = getCachedWorklogs_(year);
+    if (cached) return cached;
+  }
+  const rows = getWorklogs(year);
+  setCachedWorklogs_(year, rows);
+  return rows;
+}
+
+const PAY_PERIOD_DAYS_ = 14;
+
+/**
+ * Returns all pay-period end dates (as Date objects, ascending) that fall
+ * within [Jan 1, Dec 31] of `year`, derived from the PAY_PERIOD_END_DATE
+ * anchor at a fixed 14-day cadence. Returns [] if the anchor isn't set.
+ */
+function getPayPeriodEndDates_(year) {
+  const anchorStr = getPayPeriodEndDate();
+  if (!anchorStr) return [];
+  const anchor = new Date(anchorStr + 'T00:00:00');
+  const yearStart = new Date(year, 0, 1);
+  const yearEnd = new Date(year, 11, 31, 23, 59, 59, 999);
+  const msPerPeriod = PAY_PERIOD_DAYS_ * 24 * 60 * 60 * 1000;
+
+  const periodsFromAnchorToYearStart = Math.ceil((yearStart - anchor) / msPerPeriod);
+  const dates = [];
+  let n = periodsFromAnchorToYearStart;
+  let d = new Date(anchor.getTime() + n * msPerPeriod);
+  while (d <= yearEnd) {
+    if (d >= yearStart) dates.push(new Date(d));
+    n++;
+    d = new Date(anchor.getTime() + n * msPerPeriod);
+  }
+  return dates;
+}
+
+/**
+ * Returns {payPeriodsToDate, firstPayPeriodEnd, mostRecentPayPeriodEnd} for a
+ * year, where "most recent" is the latest period end date <= today. For a
+ * past year this is simply that year's last period end date, since all of
+ * them are already in the past.
+ */
+function getPayPeriodSummary_(year) {
+  const allDates = getPayPeriodEndDates_(year);
+  const today = new Date();
+  const eligible = allDates.filter(d => d <= today);
+  if (eligible.length === 0) return { payPeriodsToDate: 0, firstPayPeriodEnd: null, mostRecentPayPeriodEnd: null };
+  return {
+    payPeriodsToDate: eligible.length,
+    firstPayPeriodEnd: allDates[0],
+    mostRecentPayPeriodEnd: eligible[eligible.length - 1]
+  };
+}
+
+/**
+ * Returns everything the Utilization tab needs to render for a year:
+ * - projects: sorted project keys present in the year's worklog rows.
+ * - utilization: { cells: { [projectKey]: { [month 1-12]: pct|null } }, rowTotals: { [month]: pct|null },
+ *   colTotals: { [projectKey]: pct|null }, grandTotal: pct|null }. A cell is null when the project has
+ *   no allocation value for that month; row/col/grand totals are sum(hours)/sum(allocation) over the
+ *   contributing (non-null) cells, not an average of percentages.
+ * - payPeriods: { firstEnd, mostRecentEnd (ISO date strings or null), payPeriodsToDate, totalCostHours }.
+ * - revenue: { hoursThruMostRecent, grossRevenue, unratedProjects } — unratedProjects lists project keys
+ *   excluded entirely from both figures because they have no rate configured in the Config tab.
+ * - cost: { hourlyRate, overheadRate, hourlyCost, grossCost }.
+ * - profit: { grossProfit, personalProfitMargin }.
+ */
+function calculateUtilization(year, forceRefresh) {
+  const rows = getOrCollectWorklogs(year, forceRefresh);
+  const allocationRows = getAllocation();
+  const rateByProject = Object.fromEntries(allocationRows.filter(r => r.projectKey).map(r => [r.projectKey, r.rate]));
+  const allocValues = getAllocationValues_(year); // { projectKey: { month: hours } }
+
+  const projects = [...new Set(rows.map(r => r.projectKey))].sort();
+
+  const hoursByProjectMonth = {};
+  rows.forEach(r => {
+    const m = parseInt(r.month.split('-')[1], 10);
+    hoursByProjectMonth[r.projectKey] = hoursByProjectMonth[r.projectKey] || {};
+    hoursByProjectMonth[r.projectKey][m] = (hoursByProjectMonth[r.projectKey][m] || 0) + r.hours;
+  });
+
+  const cells = {};
+  const rowHourSum = {}, rowAllocSum = {};
+  const colHourSum = {}, colAllocSum = {};
+  let grandHourSum = 0, grandAllocSum = 0;
+  projects.forEach(p => {
+    cells[p] = {};
+    for (let m = 1; m <= 12; m++) {
+      const allocated = allocValues[p] && allocValues[p][m];
+      const worked = (hoursByProjectMonth[p] && hoursByProjectMonth[p][m]) || 0;
+      if (allocated == null || allocated === 0) {
+        cells[p][m] = null;
+        continue;
+      }
+      cells[p][m] = Math.round((worked / allocated) * 1000) / 10;
+      rowHourSum[m] = (rowHourSum[m] || 0) + worked;
+      rowAllocSum[m] = (rowAllocSum[m] || 0) + allocated;
+      colHourSum[p] = (colHourSum[p] || 0) + worked;
+      colAllocSum[p] = (colAllocSum[p] || 0) + allocated;
+      grandHourSum += worked;
+      grandAllocSum += allocated;
+    }
+  });
+  const pct_ = (h, a) => (a === 0 || a == null) ? null : Math.round((h / a) * 1000) / 10;
+  const rowTotals = {};
+  for (let m = 1; m <= 12; m++) rowTotals[m] = pct_(rowHourSum[m] || 0, rowAllocSum[m] || 0);
+  const colTotals = {};
+  projects.forEach(p => colTotals[p] = pct_(colHourSum[p] || 0, colAllocSum[p] || 0));
+  const grandTotal = pct_(grandHourSum, grandAllocSum);
+
+  const payPeriodInfo = getPayPeriodSummary_(year);
+  const cutoff = payPeriodInfo.mostRecentPayPeriodEnd; // Date or null
+
+  let hoursThruMostRecent = 0, grossRevenue = 0;
+  const unratedProjects = new Set();
+  if (cutoff) {
+    rows.forEach(r => {
+      const rate = rateByProject[r.projectKey];
+      if (rate == null) { unratedProjects.add(r.projectKey); return; }
+      const started = new Date(r.started);
+      if (started <= cutoff) {
+        hoursThruMostRecent += r.hours;
+        grossRevenue += r.hours * rate;
+      }
+    });
+  }
+
+  const { hourlyRate, overheadRate } = getUtilRates();
+  const hourlyCost = hourlyRate * (1 + overheadRate);
+  const totalCostHours = payPeriodInfo.payPeriodsToDate * 80;
+  const grossCost = hourlyCost * totalCostHours;
+  const grossProfit = grossRevenue - grossCost;
+  const personalProfitMargin = grossRevenue === 0 ? null : Math.round((grossProfit / grossRevenue) * 1000) / 10;
+
+  return {
+    projects,
+    utilization: { cells, rowTotals, colTotals, grandTotal },
+    payPeriods: {
+      firstEnd: payPeriodInfo.firstPayPeriodEnd ? payPeriodInfo.firstPayPeriodEnd.toISOString().slice(0, 10) : null,
+      mostRecentEnd: cutoff ? cutoff.toISOString().slice(0, 10) : null,
+      payPeriodsToDate: payPeriodInfo.payPeriodsToDate,
+      totalCostHours
+    },
+    revenue: { hoursThruMostRecent, grossRevenue, unratedProjects: [...unratedProjects] },
+    cost: { hourlyRate, overheadRate, hourlyCost, grossCost },
+    profit: { grossProfit, personalProfitMargin }
+  };
 }
 
 /**

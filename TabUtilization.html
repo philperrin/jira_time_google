@@ -1,0 +1,40 @@
+<div class="toolbar">
+  <select id="util-year" style="width:auto;"></select>
+  <button class="btn btn-primary" id="util-calc-btn" onclick="calculateUtilization()">Calculate Utilization</button>
+  <button class="btn btn-secondary" id="util-refresh-btn" onclick="calculateUtilization(true)">Refresh Worklog Data</button>
+</div>
+<div id="util-status" class="status-msg"></div>
+
+<div id="util-results" style="display:none;margin-top:16px;">
+  <h3 class="section-title" style="font-size:14px;">Monthly Utilization by Project</h3>
+  <table id="util-pivot">
+    <thead id="util-pivot-head"></thead>
+    <tbody id="util-pivot-body"></tbody>
+    <tfoot id="util-pivot-foot"></tfoot>
+  </table>
+
+  <h3 class="section-title" style="font-size:14px;margin-top:24px;">Revenue</h3>
+  <table class="metrics-table">
+    <tr><td>Hours Billed Thru <span id="util-cutoff-label"></span>:</td><td id="util-hours-thru"></td></tr>
+    <tr><td>Gross Revenue:</td><td id="util-gross-revenue"></td></tr>
+  </table>
+
+  <h3 class="section-title" style="font-size:14px;margin-top:24px;">Cost</h3>
+  <table class="metrics-table">
+    <tr><td>Hourly Rate of Pay:</td><td><input type="number" step="any" id="util-hourly-rate" style="width:100px;"></td></tr>
+    <tr><td>Overhead Rate (Est., %):</td><td><input type="number" step="any" id="util-overhead-rate" style="width:100px;"></td></tr>
+    <tr><td>Hourly Cost:</td><td id="util-hourly-cost"></td></tr>
+    <tr><td>Pay Periods To Date:</td><td id="util-periods-to-date"></td></tr>
+    <tr><td>Total Cost Hours:</td><td id="util-total-cost-hours"></td></tr>
+    <tr><td>Gross Cost:</td><td id="util-gross-cost"></td></tr>
+  </table>
+  <div class="toolbar" style="margin-top:8px;">
+    <button class="btn btn-secondary" id="util-save-rates-btn" onclick="saveUtilRates()">Save Rates</button>
+  </div>
+
+  <h3 class="section-title" style="font-size:14px;margin-top:24px;">Profit</h3>
+  <table class="metrics-table">
+    <tr><td>Gross Profit:</td><td id="util-gross-profit"></td></tr>
+    <tr><td>Personal Profit Margin:</td><td id="util-profit-margin"></td></tr>
+  </table>
+</div>

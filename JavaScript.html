@@ -4,7 +4,7 @@
   }
 
   function setDensity(mode) {
-    const container = document.getElementById('assignments-container');
+    const container = document.querySelector('main');
     if (container) {
       container.classList.remove('density-comfortable', 'density-compact');
       container.classList.add('density-' + mode);
@@ -72,18 +72,44 @@
     google.script.run
       .withSuccessHandler(renderAllocationTable)
       .getAllocation();
+    google.script.run
+      .withSuccessHandler(dateStr => { document.getElementById('cfg-pay-period-end').value = dateStr; })
+      .getPayPeriodEndDate();
   }
 
   function saveConfig() {
     const url = document.getElementById('cfg-jira-url').value.trim();
     const key = document.getElementById('cfg-api-key').value.trim();
+    const payPeriodEnd = document.getElementById('cfg-pay-period-end').value.trim();
     let pending = 0;
     function done() { if (--pending === 0) { setLoading('cfg-save-btn', false, 'Save'); showStatus('cfg-status', 'Saved!', 'success'); } }
     function fail(e) { setLoading('cfg-save-btn', false, 'Save'); showStatus('cfg-status', 'Error: ' + e.message, 'error'); }
     if (url) { pending++; google.script.run.withSuccessHandler(done).withFailureHandler(fail).saveJiraUrl(url); }
     if (key) { pending++; google.script.run.withSuccessHandler(done).withFailureHandler(fail).saveApiKey(key); }
+    if (payPeriodEnd) { pending++; google.script.run.withSuccessHandler(done).withFailureHandler(fail).savePayPeriodEndDate(payPeriodEnd); }
     if (pending > 0) { setLoading('cfg-save-btn', true, 'Save'); }
     else { showStatus('cfg-status', 'Nothing to save.', 'info'); }
+  }
+
+  function testJiraConnection() {
+    const url = document.getElementById('cfg-jira-url').value.trim();
+    const key = document.getElementById('cfg-api-key').value.trim();
+    setLoading('cfg-test-btn', true, 'Test Connection');
+    showStatus('cfg-test-status', '', '');
+    google.script.run
+      .withSuccessHandler(result => {
+        setLoading('cfg-test-btn', false, 'Test Connection');
+        if (result.ok) {
+          showStatus('cfg-test-status', '✓ Connected as ' + result.displayName, 'success');
+        } else {
+          showStatus('cfg-test-status', 'Connection failed: ' + result.error, 'error');
+        }
+      })
+      .withFailureHandler(e => {
+        setLoading('cfg-test-btn', false, 'Test Connection');
+        showStatus('cfg-test-status', 'Connection failed: ' + e.message, 'error');
+      })
+      .testJiraConnection(url, key);
   }
 
   function renderAllocationTable(rows) {
@@ -121,7 +147,7 @@
       '<td><select name="colorHex" style="width:100%">' + optionsHtml + '</select></td>' +
       '<td><input type="text" style="width:100%" name="projectKey" value="' + esc((data && data.projectKey) || '') + '" placeholder="CEOT"></td>' +
       '<td><input type="text" style="width:100%" name="projectName" value="' + esc((data && data.projectName) || '') + '" placeholder="CFA Project"></td>' +
-      '<td><input type="text" style="width:100%" name="hoursPerWeek" value="' + esc(String((data && data.hoursPerWeek) || '')) + '" placeholder="20"></td>' +
+      '<td><input type="number" step="any" style="width:100%" name="rate" value="' + esc((data && data.rate != null ? data.rate : '')) + '" placeholder="0"></td>' +
       '<td style="text-align:center"><input type="checkbox" name="ignore" ' + ignored + '></td>' +
       '<td><button class="btn" style="padding:4px 8px;" onclick="this.closest(\'tr\').remove()">✕</button></td>';
 
@@ -129,16 +155,36 @@
   }
 
   function saveAllocationTable() {
-    const rows = Array.from(document.querySelectorAll('#allocation-body tr')).map(tr => {
+    const allRows = Array.from(document.querySelectorAll('#allocation-body tr')).map(tr => {
       const cells = tr.querySelectorAll('td');
+      const rateStr = cells[3].querySelector('input').value.trim();
       return {
         colorHex: cells[0].querySelector('select').value,
         projectKey: cells[1].querySelector('input').value.trim(),
         projectName: cells[2].querySelector('input').value.trim(),
-        hoursPerWeek: parseFloat(cells[3].querySelector('input').value) || 0,
+        rate: rateStr === '' ? null : parseFloat(rateStr),
         ignore: cells[4].querySelector('input').checked
       };
-    }).filter(r => r.projectKey);
+    });
+
+    // A row with no project key is only safe to drop if it's otherwise empty
+    // (an unused blank row). If the user has entered a name or checked
+    // ignore, they've started configuring it and a missing key is a mistake,
+    // not an intentionally blank row - flag it instead of silently dropping it.
+    const problemRows = [];
+    const rows = allRows.filter((r, i) => {
+      if (r.projectKey) return true;
+      const isBlank = !r.projectName && !r.ignore;
+      if (isBlank) return false;
+      problemRows.push('Row ' + (i + 1) + (r.projectName ? " ('" + r.projectName + "')" : '') + ': missing project key');
+      return false;
+    });
+
+    if (problemRows.length) {
+      showStatus('allocation-status', 'Not saved - fix these rows: ' + problemRows.join('; '), 'error');
+      return;
+    }
+
     google.script.run
       .withSuccessHandler(() => showStatus('allocation-status', 'Allocation saved.', 'success'))
       .withFailureHandler(e => showStatus('allocation-status', 'Error: ' + e.message, 'error'))
@@ -168,6 +214,8 @@
   window.worklogRows = [];
   window.timecardAllocation = [];
 
+  const ISSUE_DROPDOWN_TIMEOUT_MS = 15000;
+
   function loadTimecardEvents() {
     const start = document.getElementById('tc-start-date').value;
     const end = document.getElementById('tc-end-date').value;
@@ -175,10 +223,41 @@
     setLoading('tc-load-btn', true, 'Import Events');
     showStatus('tc-status', 'Importing calendar events…', 'info');
 
+    // Whichever of the issues call and the calendar-events call finishes second
+    // triggers dropdown population, so the table never appears with dropdowns
+    // silently stuck empty.
+    const loadState = { issuesDone: false, issuesError: null, tableRendered: false };
+
+    function maybePopulateDropdowns() {
+      if (!loadState.tableRendered || !loadState.issuesDone) return;
+      populateIssueDropdowns(loadState.issuesError);
+    }
+
+    const issueTimeoutId = setTimeout(() => {
+      if (loadState.issuesDone) return;
+      loadState.issuesDone = true;
+      loadState.issuesError = 'Timed out waiting for Jira issues to load.';
+      showStatus('tc-status', 'Could not load issues for dropdowns: timed out.', 'error');
+      maybePopulateDropdowns();
+    }, ISSUE_DROPDOWN_TIMEOUT_MS);
+
     // Load issues for dropdown in parallel
     google.script.run
-      .withSuccessHandler(issues => { window.issueOptions = issues; })
-      .withFailureHandler(e => showStatus('tc-status', 'Could not load issues for dropdowns: ' + e.message, 'error'))
+      .withSuccessHandler(issues => {
+        clearTimeout(issueTimeoutId);
+        if (loadState.issuesDone) return; // already timed out
+        window.issueOptions = issues;
+        loadState.issuesDone = true;
+        maybePopulateDropdowns();
+      })
+      .withFailureHandler(e => {
+        clearTimeout(issueTimeoutId);
+        if (loadState.issuesDone) return; // already timed out
+        loadState.issuesDone = true;
+        loadState.issuesError = e.message;
+        showStatus('tc-status', 'Could not load issues for dropdowns: ' + e.message, 'error');
+        maybePopulateDropdowns();
+      })
       .getJiraIssues();
 
     // Load allocation (for the manual-entry Project dropdown) in parallel
@@ -190,8 +269,10 @@
       .withSuccessHandler(events => {
         window.timecardEvents = events;
         renderTimecardTable(events);
+        loadState.tableRendered = true;
         setLoading('tc-load-btn', false, 'Import Events');
         showStatus('tc-status', `${events.length} event(s) imported.`, 'success');
+        maybePopulateDropdowns();
       })
       .withFailureHandler(e => {
         setLoading('tc-load-btn', false, 'Import Events');
@@ -283,25 +364,48 @@
     container.style.display = '';
     document.getElementById('tc-summary').style.display = '';
     document.getElementById('tc-submit-toolbar').style.display = '';
+  }
 
-    // Populate issue dropdowns once issues are loaded (poll briefly)
-    let attempts = 0;
-    const populate = setInterval(() => {
-      if (window.issueOptions.length || ++attempts > 20) {
-        clearInterval(populate);
-        document.querySelectorAll('.tc-issue-select').forEach(sel => {
-          const ev = window.timecardEvents[parseInt(sel.dataset.idx)];
-          window.issueOptions.forEach(issue => {
-            const opt = document.createElement('option');
-            opt.value = issue.key;
-            opt.textContent = issue.dropdownValue;
-            if (issue.projectKey === ev.projectKey) sel.appendChild(opt);
-          });
-          sel.addEventListener('change', updateSummaryTable);
-        });
-        updateSummaryTable();
+  // Populate the per-event issue dropdowns. Called once both the calendar-events
+  // table has rendered and the issues call has settled (success, failure, or
+  // timeout) — see loadTimecardEvents(). `issuesError`, when set, means the
+  // issues call never produced data, so every dropdown gets a warning option
+  // instead of being left silently empty.
+  function populateIssueDropdowns(issuesError) {
+    document.querySelectorAll('.tc-issue-select').forEach(sel => {
+      const ev = window.timecardEvents[parseInt(sel.dataset.idx)];
+
+      if (issuesError) {
+        const warnOpt = document.createElement('option');
+        warnOpt.value = '';
+        warnOpt.disabled = true;
+        warnOpt.textContent = '⚠ Issues failed to load: ' + issuesError;
+        sel.appendChild(warnOpt);
+        sel.title = warnOpt.textContent;
+        sel.classList.add('tc-issue-select-warn');
+        return;
       }
-    }, 300);
+
+      window.issueOptions.forEach(issue => {
+        const opt = document.createElement('option');
+        opt.value = issue.key;
+        opt.textContent = issue.dropdownValue;
+        if (issue.projectKey === ev.projectKey) sel.appendChild(opt);
+      });
+      if (sel.options.length === 1) {
+        const warnOpt = document.createElement('option');
+        warnOpt.value = '';
+        warnOpt.disabled = true;
+        warnOpt.textContent = ev.projectKey
+          ? `⚠ No issues found for ${ev.projectKey}`
+          : '⚠ No project matched (check calendar color)';
+        sel.appendChild(warnOpt);
+        sel.title = warnOpt.textContent;
+        sel.classList.add('tc-issue-select-warn');
+      }
+      sel.addEventListener('change', updateSummaryTable);
+    });
+    updateSummaryTable();
   }
 
   function to12Hour(hhmm) {
@@ -463,16 +567,19 @@
   }
 
   // ── Assignments Tab ──────────────────────────────────────────
-  (function initScheduleDate() {
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    const fmt = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-    document.addEventListener('DOMContentLoaded', () => {
-      document.getElementById('schedule-date').value = fmt(tomorrow);
-    });
-  })();
-
   window.loadedIssues = [];
+
+  function defaultScheduleDate() {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  }
+
+  function defaultScheduleTime() {
+    const d = new Date();
+    d.setMinutes(0, 0, 0);
+    d.setHours(d.getHours() + 1);
+    return `${String(d.getHours()).padStart(2,'0')}:00`;
+  }
 
   function loadAssignments() {
     setLoading('assignments-load-btn', true, 'Load Assignments');
@@ -568,11 +675,11 @@
       const table = document.createElement('table');
       table.style.tableLayout = 'fixed';
       table.innerHTML = `<thead><tr>
-      <th style="width:15%">Key</th>
-      <th style="width:30%">Name</th>
-      <th style="width:15%">Status</th>
-      <th style="width:20%">Time Logged</th>
-      <th style="width:20%">Schedule</th>
+      <th style="width:12%">Key</th>
+      <th style="width:23%">Name</th>
+      <th style="width:12%">Status</th>
+      <th style="width:13%">Time Logged</th>
+      <th style="width:40%">Schedule</th>
       </tr></thead>`;
       const tbody = document.createElement('tbody');
       groupItems.forEach(({ issue, idx }) => {
@@ -580,9 +687,18 @@
         tr.innerHTML = `
           <td><a href="${esc(issue.link)}" target="_blank">${esc(issue.key)}</a></td>
           <td>${esc(issue.name)}</td>
-          <td>${esc(issue.status)}</td>
+          <td>
+            <span class="issue-status-text">${esc(issue.status)}</span>
+            ${issue.status !== 'Done' ? `<button class="btn btn-secondary mark-done-btn" style="padding:2px 6px;font-size:11px;margin-left:4px;" data-idx="${idx}" onclick="markIssueDoneRow(this)">Mark as Done</button><span class="mark-done-feedback" style="margin-left:4px;font-size:11px;"></span>` : ''}
+          </td>
           <td>${esc(issue.timeLogged)}</td>
-          <td><input type="number" min="0" step="0.25" style="width:80px;" data-idx="${idx}" class="schedule-input" placeholder="0"></td>`;
+          <td>
+            <input type="date" class="schedule-row-date" style="width:auto;" value="${defaultScheduleDate()}">
+            <input type="time" class="schedule-row-time" style="width:auto;" value="${defaultScheduleTime()}">
+            <input type="number" min="0" step="0.25" style="width:70px;" class="schedule-row-duration" placeholder="hrs" data-idx="${idx}">
+            <button class="btn btn-secondary" style="padding:4px 8px;" onclick="scheduleRow(this)">Schedule</button>
+            <span class="schedule-row-feedback" style="margin-left:4px;font-size:12px;"></span>
+          </td>`;
         tbody.appendChild(tr);
       });
       table.appendChild(tbody);
@@ -595,48 +711,84 @@
     });
 
     container.style.display = '';
-    document.getElementById('schedule-toolbar').style.display = '';
     document.getElementById('expand-all-btn').style.display = '';
     document.getElementById('collapse-all-btn').style.display = '';
     setDensity(localStorage.getItem('jtt-density') || 'comfortable');
   }
 
-  function scheduleEvents() {
-    const toSchedule = [];
-    document.querySelectorAll('.schedule-input').forEach(input => {
-      const idx = parseInt(input.dataset.idx);
-      const hours = parseFloat(input.value) || 0;
-      if (hours > 0 && idx >= 0 && idx < window.loadedIssues.length) {
-        const issue = window.loadedIssues[idx];
-        toSchedule.push({
-          key: issue.key,
-          jiraProject: issue.projectKey,
-          dropdownValue: issue.dropdownValue,
-          hours: hours
-        });
-      }
-    });
-    if (toSchedule.length === 0) {
-      showStatus('schedule-status', 'Enter hours in the Schedule column first.', 'info');
-      return;
-    }
-    const date = document.getElementById('schedule-date').value;
-    const time = document.getElementById('schedule-time').value || '09:00';
-    if (!date) { showStatus('schedule-status', 'Choose a start date first.', 'info'); return; }
-    const startDateTimeIso = `${date}T${time}:00`;
-    setLoading('schedule-btn', true, '⏱ Schedule Calendar Events');
-    showStatus('schedule-status', 'Creating calendar events…', 'info');
+  function markIssueDoneRow(button) {
+    const idx = parseInt(button.dataset.idx);
+    const issue = window.loadedIssues[idx];
+    if (!issue) return;
+    const td = button.closest('td');
+    const statusText = td.querySelector('.issue-status-text');
+    const feedback = td.querySelector('.mark-done-feedback');
+
+    button.disabled = true;
+    button.textContent = 'Marking…';
+    feedback.textContent = '';
+    feedback.title = '';
+
     google.script.run
-      .withSuccessHandler(result => {
-        setLoading('schedule-btn', false, '⏱ Schedule Calendar Events');
-        showStatus('schedule-status', `Created ${result.created} event(s) starting at ${result.startTime}.`, 'success');
-        document.querySelectorAll('.schedule-input').forEach(i => i.value = '');
+      .withSuccessHandler(() => {
+        issue.status = 'Done';
+        statusText.textContent = 'Done';
+        button.remove();
+        feedback.remove();
       })
       .withFailureHandler(e => {
-        setLoading('schedule-btn', false, '⏱ Schedule Calendar Events');
-        showStatus('schedule-status', 'Error: ' + e.message, 'error');
+        button.disabled = false;
+        button.textContent = 'Mark as Done';
+        feedback.textContent = 'Error!';
+        feedback.title = e.message;
       })
-      .scheduleCalendarEvents(toSchedule, startDateTimeIso);
+      .markIssueDone(issue.key);
+  }
+
+  function scheduleRow(button) {
+    const tr = button.closest('tr');
+    const dateInput = tr.querySelector('.schedule-row-date');
+    const timeInput = tr.querySelector('.schedule-row-time');
+    const durationInput = tr.querySelector('.schedule-row-duration');
+    const feedback = tr.querySelector('.schedule-row-feedback');
+
+    const date = dateInput.value;
+    const time = timeInput.value || '09:00';
+    const hours = parseFloat(durationInput.value) || 0;
+    const idx = parseInt(durationInput.dataset.idx);
+
+    if (!date || hours <= 0 || idx < 0 || idx >= window.loadedIssues.length) {
+      feedback.textContent = 'Error!';
+      feedback.title = !date ? 'Choose a date first.' : 'Enter a duration greater than 0.';
+      return;
+    }
+
+    const issue = window.loadedIssues[idx];
+    const startDateTimeIso = `${date}T${time}:00`;
+
+    feedback.textContent = '';
+    feedback.title = '';
+    button.disabled = true;
+    button.textContent = 'Scheduling…';
+
+    google.script.run
+      .withSuccessHandler(() => {
+        button.disabled = false;
+        button.textContent = 'Schedule';
+        feedback.textContent = 'Success!';
+        feedback.title = '';
+        durationInput.value = '';
+      })
+      .withFailureHandler(e => {
+        button.disabled = false;
+        button.textContent = 'Schedule';
+        feedback.textContent = 'Error!';
+        feedback.title = e.message;
+      })
+      .scheduleCalendarEvents(
+        [{ key: issue.key, jiraProject: issue.projectKey, summary: issue.name, hours: hours }],
+        startDateTimeIso
+      );
   }
 
   // ── Create Issue Tab ─────────────────────────────────────────
@@ -769,6 +921,247 @@
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
   }
+
+  // ── Allocation Tab ───────────────────────────────────────────
+  (function initAllocationYearSelect() {
+    const select = document.getElementById('alloc-year');
+    const populate = () => {
+      const currentYear = new Date().getFullYear();
+      select.innerHTML = '';
+      [currentYear - 1, currentYear, currentYear + 1].forEach(y => {
+        const opt = document.createElement('option');
+        opt.value = y;
+        opt.textContent = y;
+        if (y === currentYear) opt.selected = true;
+        select.appendChild(opt);
+      });
+    };
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', populate);
+    } else {
+      populate();
+    }
+  })();
+
+  function recomputeAllocationTotals() {
+    const body = document.getElementById('alloc-pivot-body');
+    const projects = window.allocProjects || [];
+    const colTotals = new Array(projects.length).fill(0);
+
+    Array.from(body.rows).forEach(row => {
+      let rowTotal = 0;
+      const inputs = row.querySelectorAll('.alloc-input');
+      inputs.forEach((input, pi) => {
+        const v = parseFloat(input.value);
+        const num = isNaN(v) ? 0 : v;
+        rowTotal += num;
+        colTotals[pi] += num;
+      });
+      row.querySelector('.alloc-row-total').textContent = rowTotal.toFixed(2);
+    });
+
+    const grandTotal = colTotals.reduce((s, v) => s + v, 0);
+    const foot = document.getElementById('alloc-pivot-foot');
+    const footCells = foot.querySelectorAll('.alloc-col-total');
+    footCells.forEach((cell, pi) => { cell.textContent = colTotals[pi].toFixed(2); });
+    foot.querySelector('.alloc-grand-total').textContent = grandTotal.toFixed(2);
+  }
+
+  function buildAllocationGrid(data, year) {
+    const MONTHS = ['January','February','March','April','May','June',
+                    'July','August','September','October','November','December'];
+
+    window.allocProjects = data.projects;
+
+    const head = document.getElementById('alloc-pivot-head');
+    const body = document.getElementById('alloc-pivot-body');
+    const foot = document.getElementById('alloc-pivot-foot');
+
+    head.innerHTML = '<tr><th>Month</th>' +
+      data.projects.map(p => `<th>${esc(p)}</th>`).join('') +
+      '<th class="pivot-total">Total</th></tr>';
+
+    body.innerHTML = MONTHS.map((name, mi) => {
+      const month = mi + 1;
+      const cells = data.projects.map(p => {
+        const v = (data.values[p] && data.values[p][month] != null) ? data.values[p][month] : '';
+        return `<td><input type="number" step="any" class="alloc-input" data-project="${esc(p)}" data-month="${month}" value="${v}"></td>`;
+      });
+      return `<tr><td>${name}</td>${cells.join('')}<td class="pivot-total alloc-row-total">0.00</td></tr>`;
+    }).join('');
+
+    foot.innerHTML = '<tr class="pivot-total"><td>Total</td>' +
+      data.projects.map(() => '<td class="alloc-col-total">0.00</td>').join('') +
+      '<td class="pivot-total alloc-grand-total">0.00</td></tr>';
+
+    body.addEventListener('input', e => {
+      if (e.target.classList.contains('alloc-input')) recomputeAllocationTotals();
+    });
+
+    recomputeAllocationTotals();
+    document.getElementById('alloc-summary').style.display = '';
+  }
+
+  function loadAllocation() {
+    const year = parseInt(document.getElementById('alloc-year').value) || new Date().getFullYear();
+    setLoading('alloc-load-btn', true, 'Set/Review Allocations');
+    showStatus('alloc-status', `Loading allocations for ${year}…`, 'info');
+    google.script.run
+      .withSuccessHandler(data => {
+        setLoading('alloc-load-btn', false, 'Set/Review Allocations');
+        window.allocYear = year;
+        buildAllocationGrid(data, year);
+        showStatus('alloc-status', '', '');
+      })
+      .withFailureHandler(e => {
+        setLoading('alloc-load-btn', false, 'Set/Review Allocations');
+        showStatus('alloc-status', 'Error: ' + e.message, 'error');
+      })
+      .getAllocationTabData(year);
+  }
+
+  function saveAllocationGrid() {
+    const year = window.allocYear || parseInt(document.getElementById('alloc-year').value) || new Date().getFullYear();
+    const values = {};
+    document.querySelectorAll('.alloc-input').forEach(input => {
+      const v = parseFloat(input.value);
+      if (isNaN(v)) return;
+      const project = input.dataset.project;
+      const month = input.dataset.month;
+      if (!values[project]) values[project] = {};
+      values[project][month] = v;
+    });
+
+    setLoading('alloc-save-btn', true, 'Save Allocations');
+    google.script.run
+      .withSuccessHandler(() => {
+        setLoading('alloc-save-btn', false, 'Save Allocations');
+        showStatus('alloc-status', 'Saved!', 'success');
+      })
+      .withFailureHandler(e => {
+        setLoading('alloc-save-btn', false, 'Save Allocations');
+        showStatus('alloc-status', 'Error: ' + e.message, 'error');
+      })
+      .saveAllocationGrid(year, values);
+  }
+
+  // ── Utilization Tab ──────────────────────────────────────────
+  (function initUtilYearSelect() {
+    const select = document.getElementById('util-year');
+    const currentYear = new Date().getFullYear();
+    const populate = () => {
+      select.innerHTML = '';
+      for (let y = currentYear; y >= currentYear - 3; y--) {
+        const opt = document.createElement('option');
+        opt.value = y;
+        opt.textContent = y;
+        select.appendChild(opt);
+      }
+    };
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', populate);
+    } else {
+      populate();
+    }
+  })();
+
+  function renderUtilizationPivot(data) {
+    const MONTHS = ['January','February','March','April','May','June',
+                    'July','August','September','October','November','December'];
+    const fmtPct = v => v == null ? '—' : `${v.toFixed(1)}%`;
+
+    const projects = data.projects;
+    const head = document.getElementById('util-pivot-head');
+    const body = document.getElementById('util-pivot-body');
+    const foot = document.getElementById('util-pivot-foot');
+
+    head.innerHTML = '<tr><th>Month</th>' +
+      projects.map(p => `<th>${esc(p)}</th>`).join('') +
+      '<th class="pivot-total">Total</th></tr>';
+
+    body.innerHTML = MONTHS.map((name, mi) => {
+      const month = mi + 1;
+      const cells = projects.map(p => `<td>${fmtPct(data.utilization.cells[p][month])}</td>`);
+      return `<tr><td>${name}</td>${cells.join('')}<td class="pivot-total">${fmtPct(data.utilization.rowTotals[month])}</td></tr>`;
+    }).join('');
+
+    foot.innerHTML = '<tr class="pivot-total"><td>Total</td>' +
+      projects.map(p => `<td>${fmtPct(data.utilization.colTotals[p])}</td>`).join('') +
+      `<td class="pivot-total">${fmtPct(data.utilization.grandTotal)}</td></tr>`;
+  }
+
+  function renderUtilizationMetrics(data) {
+    const fmtUsd = v => '$' + Math.round(v).toLocaleString();
+    const fmtPct1 = v => v == null ? '—' : `${v.toFixed(1)}%`;
+    const fmtDate = iso => iso ? new Date(iso + 'T00:00:00').toLocaleDateString() : '—';
+
+    document.getElementById('util-cutoff-label').textContent = fmtDate(data.payPeriods.mostRecentEnd);
+    document.getElementById('util-hours-thru').textContent = data.revenue.hoursThruMostRecent.toFixed(2);
+    document.getElementById('util-gross-revenue').textContent = fmtUsd(data.revenue.grossRevenue);
+
+    document.getElementById('util-hourly-rate').value = data.cost.hourlyRate || '';
+    document.getElementById('util-overhead-rate').value = data.cost.overheadRate ? (data.cost.overheadRate * 100) : '';
+    document.getElementById('util-hourly-cost').textContent = fmtUsd(data.cost.hourlyCost);
+    document.getElementById('util-periods-to-date').textContent = data.payPeriods.payPeriodsToDate;
+    document.getElementById('util-total-cost-hours').textContent = data.payPeriods.totalCostHours;
+    document.getElementById('util-gross-cost').textContent = fmtUsd(data.cost.grossCost);
+
+    document.getElementById('util-gross-profit').textContent = fmtUsd(data.profit.grossProfit);
+    document.getElementById('util-profit-margin').textContent = fmtPct1(data.profit.personalProfitMargin);
+
+    if (!data.payPeriods.mostRecentEnd) {
+      showStatus('util-status', 'No Pay Period End Date configured yet — set one on the Config tab to see pay-period and revenue figures.', 'info');
+    } else if (data.revenue.unratedProjects.length) {
+      showStatus('util-status', 'Excluded from Revenue (no rate configured on Config tab): ' + data.revenue.unratedProjects.join(', '), 'info');
+    } else {
+      showStatus('util-status', '', '');
+    }
+  }
+
+  function calculateUtilization(forceRefresh) {
+    const year = parseInt(document.getElementById('util-year').value) || new Date().getFullYear();
+    const btnId = forceRefresh ? 'util-refresh-btn' : 'util-calc-btn';
+    const label = forceRefresh ? 'Refresh Worklog Data' : 'Calculate Utilization';
+    setLoading(btnId, true, label);
+    showStatus('util-status', forceRefresh ? `Refreshing worklogs for ${year}…` : `Calculating utilization for ${year}…`, 'info');
+    google.script.run
+      .withSuccessHandler(data => {
+        setLoading(btnId, false, label);
+        renderUtilizationPivot(data);
+        renderUtilizationMetrics(data);
+        document.getElementById('util-results').style.display = '';
+      })
+      .withFailureHandler(e => {
+        setLoading(btnId, false, label);
+        showStatus('util-status', 'Error: ' + e.message, 'error');
+      })
+      .calculateUtilization(year, !!forceRefresh);
+  }
+
+  function saveUtilRates() {
+    const hourlyRate = parseFloat(document.getElementById('util-hourly-rate').value) || 0;
+    const overheadRate = (parseFloat(document.getElementById('util-overhead-rate').value) || 0) / 100;
+    setLoading('util-save-rates-btn', true, 'Save Rates');
+    google.script.run
+      .withSuccessHandler(() => {
+        setLoading('util-save-rates-btn', false, 'Save Rates');
+        showStatus('util-status', 'Rates saved.', 'success');
+      })
+      .withFailureHandler(e => {
+        setLoading('util-save-rates-btn', false, 'Save Rates');
+        showStatus('util-status', 'Error: ' + e.message, 'error');
+      })
+      .saveUtilRates(hourlyRate, overheadRate);
+  }
+
+  document.querySelector('[data-tab="profit"]').addEventListener('click', () => {
+    google.script.run
+      .withSuccessHandler(r => {
+        document.getElementById('util-hourly-rate').value = r.hourlyRate || '';
+        document.getElementById('util-overhead-rate').value = r.overheadRate ? (r.overheadRate * 100) : '';
+      })
+      .getUtilRates();
+  });
 
   // ── Changelog Tab ────────────────────────────────────────────
 
