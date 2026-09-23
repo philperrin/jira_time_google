@@ -681,3 +681,99 @@ test('saveAllocationGrid replaces only the given year, leaving other years untou
     assertEquals(raw, { 2025: { ABC: { 1: 10 } }, 2026: { ABC: { 2: 20 } } });
   });
 });
+
+/*
+-----------------------------------------------
+06: Utilization tab
+-----------------------------------------------
+*/
+test('getPayPeriodEndDates_ includes only period ends within the target year', () => {
+  withMockProperties({ PAY_PERIOD_END_DATE: '2026-01-14' }, () => {
+    const dates = getPayPeriodEndDates_(2026);
+    assertTrue(dates.every(d => d.getFullYear() === 2026), 'every returned date must fall within 2026');
+    assertTrue(dates.length > 0, 'expected at least one pay period in 2026');
+    // First period should be within 14 days of Jan 1.
+    assertTrue(dates[0].getMonth() === 0 && dates[0].getDate() <= 28, 'first period end should be in January');
+  });
+});
+
+test('getPayPeriodSummary_ counts only periods on or before today, and zeroes out with no anchor', () => {
+  withMockProperties({}, () => {
+    assertEquals(getPayPeriodSummary_(2026), { payPeriodsToDate: 0, firstPayPeriodEnd: null, mostRecentPayPeriodEnd: null });
+  });
+  withMockProperties({ PAY_PERIOD_END_DATE: '2020-01-14' }, () => {
+    const summary = getPayPeriodSummary_(2020);
+    assertTrue(summary.payPeriodsToDate > 0, 'a fully past year should have periods to date');
+    assertTrue(summary.mostRecentPayPeriodEnd.getFullYear() === 2020);
+  });
+});
+
+test('calculateUtilization treats an unset allocation and an explicit zero allocation both as a null cell', () => {
+  withMockProperties({
+    WORKLOG_CACHE: JSON.stringify({ 2026: [
+      { projectKey: 'ABC', issueKey: 'ABC-1', summary: 'x', timeSpent: '10h', started: '2026-01-05T09:00:00.000-0700', hours: 10, month: '2026-01' },
+      { projectKey: 'DEF', issueKey: 'DEF-1', summary: 'y', timeSpent: '5h', started: '2026-02-05T09:00:00.000-0700', hours: 5, month: '2026-02' }
+    ] }),
+    ALLOCATION: JSON.stringify([{ projectKey: 'ABC' }, { projectKey: 'DEF' }]),
+    ALLOCATION_VALUES: JSON.stringify({ 2026: { DEF: { 2: 0 } } }), // ABC: unset; DEF: explicit zero
+    PAY_PERIOD_END_DATE: '', UTIL_HOURLY_RATE: '0', UTIL_OVERHEAD_RATE: '0'
+  }, () => {
+    const result = calculateUtilization(2026, false);
+    assertEquals(result.utilization.cells.ABC[1], null);
+    assertEquals(result.utilization.cells.DEF[2], null);
+  });
+});
+
+test('calculateUtilization totals are sum(hours)/sum(allocation), not an average of per-cell percentages', () => {
+  withMockProperties({
+    WORKLOG_CACHE: JSON.stringify({ 2026: [
+      { projectKey: 'ABC', issueKey: 'ABC-1', summary: 'x', timeSpent: '10h', started: '2026-01-05T09:00:00.000-0700', hours: 10, month: '2026-01' },
+      { projectKey: 'ABC', issueKey: 'ABC-2', summary: 'x', timeSpent: '90h', started: '2026-02-05T09:00:00.000-0700', hours: 90, month: '2026-02' }
+    ] }),
+    ALLOCATION: JSON.stringify([{ projectKey: 'ABC' }]),
+    // Jan: 10/100 = 10%. Feb: 90/100 = 90%. A naive average would be 50%;
+    // sum(hours)/sum(allocation) = 100/200 = 50% too in this fixture, so use unequal weights:
+    ALLOCATION_VALUES: JSON.stringify({ 2026: { ABC: { 1: 100, 2: 10 } } }),
+    PAY_PERIOD_END_DATE: '', UTIL_HOURLY_RATE: '0', UTIL_OVERHEAD_RATE: '0'
+  }, () => {
+    const result = calculateUtilization(2026, false);
+    // Jan: 10/100=10%, Feb: 90/10=900%. Average of percentages = 455%.
+    // sum(hours)/sum(allocation) = 100/110 = 90.9%.
+    assertEquals(result.utilization.colTotals.ABC, 90.9);
+  });
+});
+
+test('calculateUtilization excludes unrated projects from revenue and lists them in unratedProjects', () => {
+  withMockProperties({
+    WORKLOG_CACHE: JSON.stringify({ 2026: [
+      { projectKey: 'RATED', issueKey: 'R-1', summary: 'x', timeSpent: '10h', started: '2026-01-05T09:00:00.000-0700', hours: 10, month: '2026-01' },
+      { projectKey: 'UNRATED', issueKey: 'U-1', summary: 'y', timeSpent: '10h', started: '2026-01-05T09:00:00.000-0700', hours: 10, month: '2026-01' }
+    ] }),
+    ALLOCATION: JSON.stringify([{ projectKey: 'RATED', rate: 100 }, { projectKey: 'UNRATED' }]),
+    ALLOCATION_VALUES: JSON.stringify({}),
+    PAY_PERIOD_END_DATE: '2026-01-14', UTIL_HOURLY_RATE: '0', UTIL_OVERHEAD_RATE: '0'
+  }, () => {
+    const result = calculateUtilization(2026, false);
+    assertEquals(result.revenue.unratedProjects, ['UNRATED']);
+    assertEquals(result.revenue.grossRevenue, 1000);
+  });
+});
+
+test('getOrCollectWorklogs serves from cache unless forceRefresh is true', () => {
+  let getWorklogsCalls = 0;
+  const realGetWorklogs = getWorklogs;
+  getWorklogs = year => { getWorklogsCalls++; return [{ projectKey: 'ABC', issueKey: 'ABC-1', summary: 'x', timeSpent: '1h', started: '2026-01-05T09:00:00.000-0700', hours: 1, month: '2026-01' }]; };
+  try {
+    withMockProperties({ WORKLOG_CACHE: JSON.stringify({ 2026: [{ projectKey: 'CACHED' }] }) }, () => {
+      const cached = getOrCollectWorklogs(2026, false);
+      assertEquals(cached, [{ projectKey: 'CACHED' }]);
+      assertEquals(getWorklogsCalls, 0);
+
+      const refreshed = getOrCollectWorklogs(2026, true);
+      assertEquals(refreshed[0].projectKey, 'ABC');
+      assertEquals(getWorklogsCalls, 1);
+    });
+  } finally {
+    getWorklogs = realGetWorklogs;
+  }
+});
