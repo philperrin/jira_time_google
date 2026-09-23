@@ -391,3 +391,100 @@ test('scheduleCalendarEvents splits an over-8h entry across a skipped weekend', 
     });
   });
 });
+
+/*
+-----------------------------------------------
+00d: Calendar import
+-----------------------------------------------
+*/
+function makeFakeCalendarEvent_({ title, color, status, start, end, description }) {
+  return {
+    getTitle: () => title,
+    getColor: () => color,
+    getMyStatus: () => status,
+    getStartTime: () => start,
+    getEndTime: () => end,
+    getDescription: () => description || ''
+  };
+}
+
+test('importCalendarEvents excludes events the user declined', () => {
+  const declined = makeFakeCalendarEvent_({
+    title: 'Declined meeting', color: '1', status: CalendarApp.GuestStatus.NO,
+    start: new Date(2026, 8, 22, 9, 0, 0), end: new Date(2026, 8, 22, 10, 0, 0)
+  });
+  const fakeCalendar = { getEvents: () => [declined] };
+  withMockProperties({
+    JIRA_BASE_URL: 'https://example.atlassian.net',
+    JIRA_API_KEY: 'secret',
+    ALLOCATION: JSON.stringify([{ projectKey: 'ABC', colorHex: '#828bc2' }])
+  }, () => {
+    withMockSession('user@example.com', 'America/Denver', () => {
+      withMockCalendar(fakeCalendar, () => {
+        assertEquals(importCalendarEvents('2026-09-22', '2026-09-22'), []);
+      });
+    });
+  });
+});
+
+test('importCalendarEvents excludes events whose color has no active allocation row', () => {
+  const unmatched = makeFakeCalendarEvent_({
+    title: 'Unrelated', color: '5', status: CalendarApp.GuestStatus.YES,
+    start: new Date(2026, 8, 22, 9, 0, 0), end: new Date(2026, 8, 22, 10, 0, 0)
+  });
+  const fakeCalendar = { getEvents: () => [unmatched] };
+  withMockProperties({
+    JIRA_BASE_URL: 'https://example.atlassian.net',
+    JIRA_API_KEY: 'secret',
+    ALLOCATION: JSON.stringify([{ projectKey: 'ABC', colorHex: '#828bc2' }])
+  }, () => {
+    withMockSession('user@example.com', 'America/Denver', () => {
+      withMockCalendar(fakeCalendar, () => {
+        assertEquals(importCalendarEvents('2026-09-22', '2026-09-22'), []);
+      });
+    });
+  });
+});
+
+test('importCalendarEvents matches an active row color and computes quarter-hour duration', () => {
+  const matched = makeFakeCalendarEvent_({
+    title: 'Client work', color: '1', status: CalendarApp.GuestStatus.YES,
+    start: new Date(2026, 8, 22, 9, 0, 0), end: new Date(2026, 8, 22, 10, 40, 0),
+    description: 'Working on the thing\n_extra'
+  });
+  const fakeCalendar = { getEvents: () => [matched] };
+  withMockProperties({
+    JIRA_BASE_URL: 'https://example.atlassian.net',
+    JIRA_API_KEY: 'secret',
+    ALLOCATION: JSON.stringify([{ projectKey: 'ABC', colorHex: '#828bc2' }])
+  }, () => {
+    withMockSession('user@example.com', 'America/Denver', () => {
+      withMockCalendar(fakeCalendar, () => {
+        const events = importCalendarEvents('2026-09-22', '2026-09-22');
+        assertEquals(events.length, 1);
+        assertEquals(events[0].projectKey, 'ABC');
+        assertEquals(events[0].duration, 1.75);
+        assertEquals(events[0].description, 'Working on the thing');
+      });
+    });
+  });
+});
+
+test('importCalendarEvents never matches an ignored allocation row even with a matching color', () => {
+  const matched = makeFakeCalendarEvent_({
+    title: 'Client work', color: '1', status: CalendarApp.GuestStatus.YES,
+    start: new Date(2026, 8, 22, 9, 0, 0), end: new Date(2026, 8, 22, 10, 0, 0)
+  });
+  const fakeCalendar = { getEvents: () => [matched] };
+  withMockProperties({
+    JIRA_BASE_URL: 'https://example.atlassian.net',
+    JIRA_API_KEY: 'secret',
+    ALLOCATION: JSON.stringify([{ projectKey: 'ABC', colorHex: '#828bc2', ignore: true }])
+  }, () => {
+    withMockSession('user@example.com', 'America/Denver', () => {
+      withMockCalendar(fakeCalendar, () => {
+        assertEquals(importCalendarEvents('2026-09-22', '2026-09-22'), []);
+      });
+    });
+  });
+});
