@@ -208,3 +208,115 @@ test('testJiraConnection returns ok:false instead of throwing when fetch itself 
     });
   });
 });
+
+/*
+-----------------------------------------------
+00b: Jira issues
+-----------------------------------------------
+*/
+test('getJiraIssues throws when URL/API key are unset', () => {
+  withMockProperties({}, () => {
+    assertThrows(() => getJiraIssues(), 'expected a throw when config is missing');
+  });
+});
+
+test('getJiraIssues excludes Archive and Managed Services Internal projects', () => {
+  const searchBody = JSON.stringify({
+    issues: [
+      { key: 'ABC-1', fields: { summary: 'Keep me', status: { name: 'To Do' }, project: { name: 'Alpha' } } },
+      { key: 'ARC-1', fields: { summary: 'Drop me', status: { name: 'To Do' }, project: { name: 'Archive 2020' } } },
+      { key: 'MSI-1', fields: { summary: 'Drop me too', status: { name: 'To Do' }, project: { name: 'Managed Services Internal' } } }
+    ]
+  });
+  withMockSession('user@example.com', null, () => {
+    withMockProperties({ JIRA_BASE_URL: 'https://example.atlassian.net', JIRA_API_KEY: 'secret' }, () => {
+      withMockUrlFetch({
+        fetch: () => mockResponse_(200, searchBody),
+        fetchAll: requests => requests.map(() => mockResponse_(200, JSON.stringify({ worklogs: [], total: 0 })))
+      }, () => {
+        const issues = getJiraIssues();
+        assertEquals(issues.map(i => i.key), ['ABC-1']);
+      });
+    });
+  });
+});
+
+test('getJiraIssues concatenates paginated search results', () => {
+  let call = 0;
+  withMockSession('user@example.com', null, () => {
+    withMockProperties({ JIRA_BASE_URL: 'https://example.atlassian.net', JIRA_API_KEY: 'secret' }, () => {
+      withMockUrlFetch({
+        fetch: () => {
+          call++;
+          if (call === 1) {
+            return mockResponse_(200, JSON.stringify({
+              issues: [{ key: 'ABC-1', fields: { summary: 'One', status: { name: 'To Do' }, project: { name: 'Alpha' } } }],
+              nextPageToken: 'page2'
+            }));
+          }
+          return mockResponse_(200, JSON.stringify({
+            issues: [{ key: 'ABC-2', fields: { summary: 'Two', status: { name: 'To Do' }, project: { name: 'Alpha' } } }]
+          }));
+        },
+        fetchAll: requests => requests.map(() => mockResponse_(200, JSON.stringify({ worklogs: [], total: 0 })))
+      }, () => {
+        const issues = getJiraIssues();
+        assertEquals(issues.map(i => i.key), ['ABC-1', 'ABC-2']);
+      });
+    });
+  });
+});
+
+test('getJiraIssues computes timeLogged in hours rounded to 2 decimals', () => {
+  const searchBody = JSON.stringify({
+    issues: [{ key: 'ABC-1', fields: { summary: 'One', status: { name: 'To Do' }, project: { name: 'Alpha' } } }]
+  });
+  withMockSession('user@example.com', null, () => {
+    withMockProperties({ JIRA_BASE_URL: 'https://example.atlassian.net', JIRA_API_KEY: 'secret' }, () => {
+      withMockUrlFetch({
+        fetch: () => mockResponse_(200, searchBody),
+        fetchAll: requests => requests.map(() => mockResponse_(200, JSON.stringify({
+          worklogs: [{ author: { emailAddress: 'user@example.com' }, timeSpentSeconds: 5401 }],
+          total: 1
+        })))
+      }, () => {
+        const issues = getJiraIssues();
+        assertEquals(issues[0].timeLogged, 1.5);
+      });
+    });
+  });
+});
+
+test('markIssueDone posts the transition whose target status is "Done" (case-insensitive)', () => {
+  let postedTransitionId = null;
+  withMockSession('user@example.com', null, () => {
+    withMockProperties({ JIRA_BASE_URL: 'https://example.atlassian.net', JIRA_API_KEY: 'secret' }, () => {
+      withMockUrlFetch({
+        fetch: (url, opts) => {
+          if (opts.method === 'get') {
+            return mockResponse_(200, JSON.stringify({
+              transitions: [{ id: '11', to: { name: 'In Progress' } }, { id: '31', to: { name: 'DONE' } }]
+            }));
+          }
+          postedTransitionId = JSON.parse(opts.payload).transition.id;
+          return mockResponse_(204, '');
+        }
+      }, () => {
+        markIssueDone('ABC-1');
+        assertEquals(postedTransitionId, '31');
+      });
+    });
+  });
+});
+
+test('markIssueDone throws a clear error when no Done transition exists', () => {
+  withMockSession('user@example.com', null, () => {
+    withMockProperties({ JIRA_BASE_URL: 'https://example.atlassian.net', JIRA_API_KEY: 'secret' }, () => {
+      withMockUrlFetch({
+        fetch: () => mockResponse_(200, JSON.stringify({ transitions: [{ id: '11', to: { name: 'In Progress' } }] }))
+      }, () => {
+        assertThrows(() => markIssueDone('ABC-1'), 'expected a throw when no Done transition exists');
+      });
+    });
+  });
+});
