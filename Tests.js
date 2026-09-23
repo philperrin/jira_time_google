@@ -55,12 +55,20 @@ function mockResponse_(code, body) {
   return { getResponseCode: () => code, getContentText: () => body };
 }
 
+// Each installer re-reads the global immediately after assigning it and
+// throws if the assignment didn't take (e.g. a non-writable global under a
+// GAS runtime quirk never exercised by the Node harness). Without this check
+// a silently-ignored assignment would run the "mocked" test against the real
+// Jira/Calendar/PropertiesService/Session — see the finding this guards
+// against in the final review ledger.
 function withMockUrlFetch(handlers, fn) {
   const real = UrlFetchApp;
-  UrlFetchApp = {
+  const mock = {
     fetch: handlers.fetch || (() => mockResponse_(200, '{}')),
     fetchAll: handlers.fetchAll || (requests => requests.map(() => mockResponse_(200, '{}')))
   };
+  UrlFetchApp = mock;
+  if (UrlFetchApp !== mock) throw new Error('withMockUrlFetch: assignment to global UrlFetchApp did not take effect');
   try {
     fn();
   } finally {
@@ -70,12 +78,14 @@ function withMockUrlFetch(handlers, fn) {
 
 function withMockCalendar(fakeCalendar, fn) {
   const real = CalendarApp;
-  CalendarApp = {
+  const mock = {
     getDefaultCalendar: () => fakeCalendar,
     getCalendarById: () => fakeCalendar,
     EventColor: real.EventColor,
     GuestStatus: real.GuestStatus
   };
+  CalendarApp = mock;
+  if (CalendarApp !== mock) throw new Error('withMockCalendar: assignment to global CalendarApp did not take effect');
   try {
     fn();
   } finally {
@@ -86,12 +96,14 @@ function withMockCalendar(fakeCalendar, fn) {
 function withMockProperties(initial, fn) {
   const store = Object.assign({}, initial);
   const real = PropertiesService;
-  PropertiesService = {
+  const mock = {
     getUserProperties: () => ({
       getProperty: k => (k in store ? store[k] : null),
       setProperty: (k, v) => { store[k] = v; }
     })
   };
+  PropertiesService = mock;
+  if (PropertiesService !== mock) throw new Error('withMockProperties: assignment to global PropertiesService did not take effect');
   try {
     fn();
   } finally {
@@ -101,10 +113,12 @@ function withMockProperties(initial, fn) {
 
 function withMockSession(email, tz, fn) {
   const real = Session;
-  Session = {
+  const mock = {
     getActiveUser: () => ({ getEmail: () => email }),
     getScriptTimeZone: () => tz || real.getScriptTimeZone()
   };
+  Session = mock;
+  if (Session !== mock) throw new Error('withMockSession: assignment to global Session did not take effect');
   try {
     fn();
   } finally {
@@ -536,7 +550,7 @@ test('getWorklogs excludes entries outside the requested year, even from an extr
       key: 'ABC-1',
       fields: {
         summary: 'One', project: { key: 'ABC' },
-        worklog: { worklogs: [], total: 1 } // 0 loaded, 1 total -> triggers one extra page fetch
+        worklog: { worklogs: [], total: 2 } // 0 loaded, 2 total -> triggers one extra page fetch
       }
     }]
   });
@@ -546,14 +560,21 @@ test('getWorklogs excludes entries outside the requested year, even from an extr
         fetch: url => {
           call++;
           if (call === 1) return mockResponse_(200, searchBody);
-          // Extra worklog page: one entry from the prior year, out of range.
+          // Extra worklog page: one entry from the prior year (out of range) and
+          // one from the requested year (in range) — proves the extra page was
+          // actually fetched and merged, not just skipped.
           return mockResponse_(200, JSON.stringify({
-            worklogs: [{ author: { emailAddress: 'user@example.com' }, timeSpent: '1h', started: '2025-12-31T09:00:00.000-0700' }]
+            worklogs: [
+              { author: { emailAddress: 'user@example.com' }, timeSpent: '1h', started: '2025-12-31T09:00:00.000-0700' },
+              { author: { emailAddress: 'user@example.com' }, timeSpent: '3h', started: '2026-06-15T09:00:00.000-0700' }
+            ]
           }));
         }
       }, () => {
         const rows = getWorklogs(2026);
-        assertEquals(rows, []);
+        assertEquals(call, 2, 'expected exactly one extra worklog page fetch beyond the initial search');
+        assertEquals(rows.length, 1);
+        assertEquals(rows[0].hours, 3);
       });
     });
   });
@@ -574,14 +595,19 @@ test('sendTimeEntries parses AM/PM start times correctly, including 12am/12pm ed
     });
   });
   assertEquals(posted.length, 2);
-  assertTrue(posted[0].started.indexOf('T00:00:00') !== -1, '12:00 AM should be hour 0');
-  assertTrue(posted[1].started.indexOf('T12:00:00') !== -1, '12:00 PM should be hour 12');
+  // Code.js's `combined` Date is built and mutated in the script's configured
+  // project timezone (America/Denver, per appsscript.json), then formatted to
+  // UTC for Jira. 2026-03-10 is in Mountain Daylight Time (UTC-6), so Denver
+  // 12:00 AM/PM is 06:00/18:00 UTC — not the same clock time, per CLAUDE.md's
+  // "all times are converted to UTC before being posted to Jira".
+  assertTrue(posted[0].started.indexOf('T06:00:00') !== -1, '12:00 AM Denver should post as 06:00 UTC (MDT)');
+  assertTrue(posted[1].started.indexOf('T18:00:00') !== -1, '12:00 PM Denver should post as 18:00 UTC (MDT)');
 });
 
 test('sendTimeEntries formats a late-local-time entry to its correct UTC date (day-boundary crossing)', () => {
-  // America/Denver 11:30 PM local == 05:30 UTC the *next* calendar day (MDT, UTC-6) or 06:30 (MST, UTC-7).
-  // Assert only that the UTC hour/date rolled forward relative to the local date, not a fixed offset,
-  // so the test is correct regardless of daylight-saving status on the run date.
+  // America/Denver 11:30 PM local on 2026-03-10 (MDT, UTC-6) is 05:30 UTC on
+  // 2026-03-11 — the UTC calendar date must roll forward even though the
+  // entry's local `date` field stays on the 10th.
   let posted = null;
   withMockProperties({ JIRA_BASE_URL: 'https://example.atlassian.net', JIRA_API_KEY: 'secret' }, () => {
     withMockSession('user@example.com', null, () => {
@@ -592,9 +618,7 @@ test('sendTimeEntries formats a late-local-time entry to its correct UTC date (d
       });
     });
   });
-  const utcDate = posted.started.slice(0, 10);
-  assertTrue(utcDate === '2026-03-11' || utcDate === '2026-03-10', 'expected a valid UTC-shifted or same-day date, not garbage');
-  assertTrue(/^\d{4}-\d{2}-\d{2}T\d{2}:30:00\.000\+0000$/.test(posted.started), 'expected the formatted UTC string shape with :30 minutes preserved');
+  assertEquals(posted.started, '2026-03-11T05:30:00.000+0000');
 });
 
 test('sendTimeEntries skips entries with no issueKey', () => {
@@ -719,8 +743,11 @@ test('calculateUtilization treats an unset allocation and an explicit zero alloc
     PAY_PERIOD_END_DATE: '', UTIL_HOURLY_RATE: '0', UTIL_OVERHEAD_RATE: '0'
   }, () => {
     const result = calculateUtilization(2026, false);
-    assertEquals(result.utilization.cells.ABC[1], null);
-    assertEquals(result.utilization.cells.DEF[2], null);
+    // assertTrue with a strict === check, not assertEquals: JSON.stringify(Infinity)
+    // and JSON.stringify(NaN) both serialize to "null", so a JSON-based equality
+    // check can't tell a real null cell from a divide-by-zero that leaked through.
+    assertTrue(result.utilization.cells.ABC[1] === null, 'unset allocation must produce a null cell, not Infinity/NaN');
+    assertTrue(result.utilization.cells.DEF[2] === null, 'explicit zero allocation must produce a null cell, not Infinity/NaN');
   });
 });
 
