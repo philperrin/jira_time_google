@@ -621,14 +621,22 @@ function getPayPeriodSummary_(year) {
  * Returns everything the Utilization tab needs to render for a year:
  * - projects: sorted project keys present in the year's worklog rows.
  * - utilization: { cells: { [projectKey]: { [month 1-12]: pct|null } }, rowTotals: { [month]: pct|null },
- *   colTotals: { [projectKey]: pct|null }, grandTotal: pct|null }. A cell is null when the project has
- *   no allocation value for that month; row/col/grand totals are sum(hours)/sum(allocation) over the
- *   contributing (non-null) cells, not an average of percentages.
+ *   runningTotals: { [month]: pct|null }, colTotals: { [projectKey]: pct|null }, grandTotal: pct|null }.
+ *   A cell is null when the project has no allocation value for that month; row/col/grand totals are
+ *   sum(hours)/sum(allocation) over the contributing (non-null) cells, not an average of percentages.
+ *   runningTotals[month] is sum(hours)/sum(allocation) accumulated over months 1..month.
+ *   When a pay-period anchor is configured, no worklog or allocation data past the most recent pay
+ *   period end date is counted anywhere above: months entirely after that date are treated as having
+ *   no allocation (null cells, excluded from every total), the month containing the cutoff has its
+ *   allocation prorated by the fraction of that month elapsed, and only worklogs on or before the
+ *   cutoff date are summed. Without an anchor configured, the full calendar year is used unrestricted.
  * - payPeriods: { firstEnd, mostRecentEnd (ISO date strings or null), payPeriodsToDate, totalCostHours }.
  * - revenue: { hoursThruMostRecent, grossRevenue, unratedProjects } — unratedProjects lists project keys
  *   excluded entirely from both figures because they have no rate configured in the Config tab.
- * - cost: { hourlyRate, overheadRate, hourlyCost, grossCost }.
- * - profit: { grossProfit, personalProfitMargin }.
+ * - cost: { hourlyRate, overheadRate, hourlyCost, grossCost, utilityPct }. utilityPct is the same
+ *   sum(hours)/sum(allocation) figure as utilization.grandTotal, i.e. hours worked through the most
+ *   recent pay period end date divided by the prorated allocation through that date.
+ * - profit: { grossProfit, personalProfitMargin, markupPct }. markupPct is grossProfit / grossCost.
  */
 function calculateUtilization(year, forceRefresh) {
   const rows = getOrCollectWorklogs(year, forceRefresh);
@@ -638,8 +646,14 @@ function calculateUtilization(year, forceRefresh) {
 
   const projects = [...new Set(rows.map(r => r.projectKey))].sort();
 
+  const payPeriodInfo = getPayPeriodSummary_(year);
+  const cutoff = payPeriodInfo.mostRecentPayPeriodEnd; // Date or null
+  const cutoffMonth = cutoff ? cutoff.getMonth() + 1 : null;
+  const cutoffMonthAllocFraction = cutoff ? cutoff.getDate() / new Date(year, cutoffMonth, 0).getDate() : null;
+
+  const cutoffRows = cutoff ? rows.filter(r => new Date(r.started) <= cutoff) : rows;
   const hoursByProjectMonth = {};
-  rows.forEach(r => {
+  cutoffRows.forEach(r => {
     const m = parseInt(r.month.split('-')[1], 10);
     hoursByProjectMonth[r.projectKey] = hoursByProjectMonth[r.projectKey] || {};
     hoursByProjectMonth[r.projectKey][m] = (hoursByProjectMonth[r.projectKey][m] || 0) + r.hours;
@@ -652,7 +666,11 @@ function calculateUtilization(year, forceRefresh) {
   projects.forEach(p => {
     cells[p] = {};
     for (let m = 1; m <= 12; m++) {
-      const allocated = allocValues[p] && allocValues[p][m];
+      let allocated = allocValues[p] && allocValues[p][m];
+      if (cutoff && allocated != null) {
+        if (m > cutoffMonth) allocated = null;
+        else if (m === cutoffMonth) allocated = allocated * cutoffMonthAllocFraction;
+      }
       const worked = (hoursByProjectMonth[p] && hoursByProjectMonth[p][m]) || 0;
       if (allocated == null || allocated === 0) {
         cells[p][m] = null;
@@ -670,12 +688,20 @@ function calculateUtilization(year, forceRefresh) {
   const pct_ = (h, a) => (a === 0 || a == null) ? null : Math.round((h / a) * 1000) / 10;
   const rowTotals = {};
   for (let m = 1; m <= 12; m++) rowTotals[m] = pct_(rowHourSum[m] || 0, rowAllocSum[m] || 0);
+  const runningTotals = {};
+  let cumHourSum = 0, cumAllocSum = 0;
+  for (let m = 1; m <= 12; m++) {
+    if (cutoff && m > cutoffMonth) {
+      runningTotals[m] = null;
+      continue;
+    }
+    cumHourSum += rowHourSum[m] || 0;
+    cumAllocSum += rowAllocSum[m] || 0;
+    runningTotals[m] = pct_(cumHourSum, cumAllocSum);
+  }
   const colTotals = {};
   projects.forEach(p => colTotals[p] = pct_(colHourSum[p] || 0, colAllocSum[p] || 0));
   const grandTotal = pct_(grandHourSum, grandAllocSum);
-
-  const payPeriodInfo = getPayPeriodSummary_(year);
-  const cutoff = payPeriodInfo.mostRecentPayPeriodEnd; // Date or null
 
   let hoursThruMostRecent = 0, grossRevenue = 0;
   const unratedProjects = new Set();
@@ -697,10 +723,11 @@ function calculateUtilization(year, forceRefresh) {
   const grossCost = hourlyCost * totalCostHours;
   const grossProfit = grossRevenue - grossCost;
   const personalProfitMargin = grossRevenue === 0 ? null : Math.round((grossProfit / grossRevenue) * 1000) / 10;
+  const markupPct = grossCost === 0 ? null : Math.round((grossProfit / grossCost) * 1000) / 10;
 
   return {
     projects,
-    utilization: { cells, rowTotals, colTotals, grandTotal },
+    utilization: { cells, rowTotals, runningTotals, colTotals, grandTotal },
     payPeriods: {
       firstEnd: payPeriodInfo.firstPayPeriodEnd ? payPeriodInfo.firstPayPeriodEnd.toISOString().slice(0, 10) : null,
       mostRecentEnd: cutoff ? cutoff.toISOString().slice(0, 10) : null,
@@ -708,8 +735,8 @@ function calculateUtilization(year, forceRefresh) {
       totalCostHours
     },
     revenue: { hoursThruMostRecent, grossRevenue, unratedProjects: [...unratedProjects] },
-    cost: { hourlyRate, overheadRate, hourlyCost, grossCost },
-    profit: { grossProfit, personalProfitMargin }
+    cost: { hourlyRate, overheadRate, hourlyCost, grossCost, utilityPct: grandTotal },
+    profit: { grossProfit, personalProfitMargin, markupPct }
   };
 }
 

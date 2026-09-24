@@ -770,6 +770,47 @@ test('calculateUtilization totals are sum(hours)/sum(allocation), not an average
   });
 });
 
+test('calculateUtilization prorates the cutoff month, excludes months after it, and computes a cumulative running total', () => {
+  const year = 2026;
+  const anchor = '2026-01-14';
+  let cutoff;
+  withMockProperties({ PAY_PERIOD_END_DATE: anchor }, () => {
+    cutoff = getPayPeriodSummary_(year).mostRecentPayPeriodEnd;
+  });
+  assertTrue(!!cutoff, 'expected a cutoff for a partially-elapsed year');
+  const cutoffMonth = cutoff.getMonth() + 1;
+  const cutoffDay = cutoff.getDate();
+  const daysInMonth = new Date(year, cutoffMonth, 0).getDate();
+  assertTrue(cutoffMonth < 12, 'test needs a month after the cutoff to exist; pick a different anchor if this ever fails');
+  const afterMonth = cutoffMonth + 1;
+  const pad = n => String(n).padStart(2, '0');
+
+  const worklogRows = [
+    // Before the cutoff day, in the cutoff month: counted.
+    { projectKey: 'ABC', issueKey: 'ABC-1', summary: 'x', timeSpent: '5h', started: `${year}-${pad(cutoffMonth)}-01T09:00:00.000-0700`, hours: 5, month: `${year}-${pad(cutoffMonth)}` },
+    // After the cutoff day, still in the cutoff month: excluded.
+    { projectKey: 'ABC', issueKey: 'ABC-2', summary: 'y', timeSpent: '7h', started: `${year}-${pad(cutoffMonth)}-${pad(Math.min(cutoffDay + 1, daysInMonth))}T09:00:00.000-0700`, hours: 7, month: `${year}-${pad(cutoffMonth)}` },
+    // In the month after the cutoff: excluded entirely.
+    { projectKey: 'ABC', issueKey: 'ABC-3', summary: 'z', timeSpent: '9h', started: `${year}-${pad(afterMonth)}-01T09:00:00.000-0700`, hours: 9, month: `${year}-${pad(afterMonth)}` }
+  ];
+
+  withMockProperties({
+    WORKLOG_CACHE: JSON.stringify({ [year]: worklogRows }),
+    ALLOCATION_VALUES: JSON.stringify({ [year]: { ABC: { [cutoffMonth]: 100, [afterMonth]: 100 } } }),
+    ALLOCATION: JSON.stringify([{ projectKey: 'ABC' }]),
+    PAY_PERIOD_END_DATE: anchor, UTIL_HOURLY_RATE: '0', UTIL_OVERHEAD_RATE: '0'
+  }, () => {
+    const result = calculateUtilization(year, false);
+
+    const expectedAlloc = 100 * (cutoffDay / daysInMonth);
+    const expectedPct = Math.round((5 / expectedAlloc) * 1000) / 10;
+    assertEquals(result.utilization.cells.ABC[cutoffMonth], expectedPct, 'cutoff month must use prorated allocation and only pre-cutoff hours');
+    assertTrue(result.utilization.cells.ABC[afterMonth] === null, 'month after cutoff must be a null cell even though it has a configured allocation');
+    assertEquals(result.utilization.runningTotals[cutoffMonth], expectedPct, 'running total through the cutoff month should equal cumulative hours/allocation so far');
+    assertTrue(result.utilization.runningTotals[afterMonth] === null, 'running total must not advance past the cutoff month');
+  });
+});
+
 test('calculateUtilization excludes unrated projects from revenue and lists them in unratedProjects', () => {
   withMockProperties({
     WORKLOG_CACHE: JSON.stringify({ 2026: [
@@ -783,6 +824,50 @@ test('calculateUtilization excludes unrated projects from revenue and lists them
     const result = calculateUtilization(2026, false);
     assertEquals(result.revenue.unratedProjects, ['UNRATED']);
     assertEquals(result.revenue.grossRevenue, 1000);
+  });
+});
+
+test('calculateUtilization computes cost.utilityPct as the same sum(hours)/sum(allocation) figure as the grand total', () => {
+  // A fully-elapsed past year with an anchor landing exactly on Dec 31 avoids any
+  // cutoff-month proration, so June's allocation is used unprorated.
+  const year = 2020;
+  const anchor = '2020-12-31';
+  withMockProperties({
+    WORKLOG_CACHE: JSON.stringify({ [year]: [
+      { projectKey: 'ABC', issueKey: 'ABC-1', summary: 'x', timeSpent: '10h', started: `${year}-06-05T09:00:00.000-0700`, hours: 10, month: `${year}-06` }
+    ] }),
+    ALLOCATION: JSON.stringify([{ projectKey: 'ABC' }]),
+    ALLOCATION_VALUES: JSON.stringify({ [year]: { ABC: { 6: 50 } } }),
+    PAY_PERIOD_END_DATE: anchor, UTIL_HOURLY_RATE: '0', UTIL_OVERHEAD_RATE: '0'
+  }, () => {
+    const result = calculateUtilization(year, false);
+    assertEquals(result.cost.utilityPct, result.utilization.grandTotal, 'utilityPct must match the pivot grand total');
+    assertEquals(result.cost.utilityPct, 20, 'expected 10 hours / 50 allocated = 20%');
+  });
+});
+
+test('calculateUtilization computes profit.markupPct as grossProfit / grossCost', () => {
+  const year = 2020;
+  const anchor = '2020-12-31';
+  let payPeriodsToDate;
+  withMockProperties({ PAY_PERIOD_END_DATE: anchor }, () => {
+    payPeriodsToDate = getPayPeriodSummary_(year).payPeriodsToDate;
+  });
+  withMockProperties({
+    WORKLOG_CACHE: JSON.stringify({ [year]: [
+      { projectKey: 'ABC', issueKey: 'ABC-1', summary: 'x', timeSpent: '10h', started: `${year}-06-05T09:00:00.000-0700`, hours: 10, month: `${year}-06` }
+    ] }),
+    ALLOCATION: JSON.stringify([{ projectKey: 'ABC', rate: 100 }]),
+    ALLOCATION_VALUES: JSON.stringify({}),
+    PAY_PERIOD_END_DATE: anchor, UTIL_HOURLY_RATE: '25', UTIL_OVERHEAD_RATE: '0'
+  }, () => {
+    const result = calculateUtilization(year, false);
+    const expectedGrossCost = 25 * payPeriodsToDate * 80;
+    const expectedGrossProfit = 1000 - expectedGrossCost; // 10h * $100/h revenue
+    const expectedMarkup = Math.round((expectedGrossProfit / expectedGrossCost) * 1000) / 10;
+    assertEquals(result.cost.grossCost, expectedGrossCost);
+    assertEquals(result.profit.grossProfit, expectedGrossProfit);
+    assertEquals(result.profit.markupPct, expectedMarkup);
   });
 });
 

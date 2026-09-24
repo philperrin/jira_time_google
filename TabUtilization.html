@@ -21,12 +21,13 @@
 
   <h3 class="section-title" style="font-size:14px;margin-top:24px;">Cost</h3>
   <table class="metrics-table">
-    <tr><td>Hourly Rate of Pay:</td><td><input type="number" step="any" id="util-hourly-rate" style="width:100px;"></td></tr>
+    <tr><td>Hourly Rate of Pay:</td><td><input type="text" inputmode="decimal" id="util-hourly-rate" style="width:100px;"></td></tr>
     <tr><td>Overhead Rate (Est., %):</td><td><input type="number" step="any" id="util-overhead-rate" style="width:100px;"></td></tr>
     <tr><td>Hourly Cost:</td><td id="util-hourly-cost"></td></tr>
     <tr><td>Pay Periods To Date:</td><td id="util-periods-to-date"></td></tr>
     <tr><td>Total Cost Hours:</td><td id="util-total-cost-hours"></td></tr>
     <tr><td>Gross Cost:</td><td id="util-gross-cost"></td></tr>
+    <tr><td>Utility %:</td><td id="util-utility-pct"></td></tr>
   </table>
   <div class="toolbar" style="margin-top:8px;">
     <button class="btn btn-secondary" id="util-save-rates-btn" onclick="saveUtilRates()">Save Rates</button>
@@ -36,5 +37,6 @@
   <table class="metrics-table">
     <tr><td>Gross Profit:</td><td id="util-gross-profit"></td></tr>
     <tr><td>Personal Profit Margin:</td><td id="util-profit-margin"></td></tr>
+    <tr><td>Markup %:</td><td id="util-markup-pct"></td></tr>
   </table>
 </div>

@@ -1077,21 +1077,22 @@
 
     head.innerHTML = '<tr><th>Month</th>' +
       projects.map(p => `<th>${esc(p)}</th>`).join('') +
-      '<th class="pivot-total">Total</th></tr>';
+      '<th class="pivot-total">Total</th><th class="pivot-total">Running Total</th></tr>';
 
     body.innerHTML = MONTHS.map((name, mi) => {
       const month = mi + 1;
       const cells = projects.map(p => `<td>${fmtPct(data.utilization.cells[p][month])}</td>`);
-      return `<tr><td>${name}</td>${cells.join('')}<td class="pivot-total">${fmtPct(data.utilization.rowTotals[month])}</td></tr>`;
+      return `<tr><td>${name}</td>${cells.join('')}<td class="pivot-total">${fmtPct(data.utilization.rowTotals[month])}</td><td class="pivot-total">${fmtPct(data.utilization.runningTotals[month])}</td></tr>`;
     }).join('');
 
     foot.innerHTML = '<tr class="pivot-total"><td>Total</td>' +
       projects.map(p => `<td>${fmtPct(data.utilization.colTotals[p])}</td>`).join('') +
-      `<td class="pivot-total">${fmtPct(data.utilization.grandTotal)}</td></tr>`;
+      `<td class="pivot-total">${fmtPct(data.utilization.grandTotal)}</td><td class="pivot-total"></td></tr>`;
   }
 
   function renderUtilizationMetrics(data) {
     const fmtUsd = v => '$' + Math.round(v).toLocaleString();
+    const fmtUsdRate = v => '$' + Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     const fmtPct1 = v => v == null ? '—' : `${v.toFixed(1)}%`;
     const fmtDate = iso => iso ? new Date(iso + 'T00:00:00').toLocaleDateString() : '—';
 
@@ -1099,15 +1100,17 @@
     document.getElementById('util-hours-thru').textContent = data.revenue.hoursThruMostRecent.toFixed(2);
     document.getElementById('util-gross-revenue').textContent = fmtUsd(data.revenue.grossRevenue);
 
-    document.getElementById('util-hourly-rate').value = data.cost.hourlyRate || '';
+    document.getElementById('util-hourly-rate').value = data.cost.hourlyRate ? fmtUsdRate(data.cost.hourlyRate) : '';
     document.getElementById('util-overhead-rate').value = data.cost.overheadRate ? (data.cost.overheadRate * 100) : '';
     document.getElementById('util-hourly-cost').textContent = fmtUsd(data.cost.hourlyCost);
     document.getElementById('util-periods-to-date').textContent = data.payPeriods.payPeriodsToDate;
     document.getElementById('util-total-cost-hours').textContent = data.payPeriods.totalCostHours;
     document.getElementById('util-gross-cost').textContent = fmtUsd(data.cost.grossCost);
+    document.getElementById('util-utility-pct').textContent = fmtPct1(data.cost.utilityPct);
 
     document.getElementById('util-gross-profit').textContent = fmtUsd(data.profit.grossProfit);
     document.getElementById('util-profit-margin').textContent = fmtPct1(data.profit.personalProfitMargin);
+    document.getElementById('util-markup-pct').textContent = fmtPct1(data.profit.markupPct);
 
     if (!data.payPeriods.mostRecentEnd) {
       showStatus('util-status', 'No Pay Period End Date configured yet — set one on the Config tab to see pay-period and revenue figures.', 'info');
@@ -1139,7 +1142,8 @@
   }
 
   function saveUtilRates() {
-    const hourlyRate = parseFloat(document.getElementById('util-hourly-rate').value) || 0;
+    const rawRate = document.getElementById('util-hourly-rate').value;
+    const hourlyRate = parseFloat(String(rawRate).replace(/[^0-9.]/g, '')) || 0;
     const overheadRate = (parseFloat(document.getElementById('util-overhead-rate').value) || 0) / 100;
     setLoading('util-save-rates-btn', true, 'Save Rates');
     google.script.run
